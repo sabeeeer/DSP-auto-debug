@@ -7,7 +7,7 @@
 
 | 用途 | 路径 | 状态 |
 |---|---|---|
-| **CCS 12.x（主力）** | `<CCS_ROOT>`（例：`F:\ccs`；注册表 `HKLM\SOFTWARE\Texas Instruments\Code Composer Studio <版本>` 的 `Location` 指向它） | 已安装 |
+| **CCS 12.x（主力）** | `<CCS_ROOT>`（例：`C:\ti\ccs1280`；注册表 `HKLM\SOFTWARE\Texas Instruments\Code Composer Studio <版本>` 的 `Location` 指向它） | 已安装 |
 | CCS12 GUI | `<CCS_ROOT>\eclipse\ccstudio.exe`（命令行 `eclipsec.exe`） | 存在 |
 | CCS12 的 C2000 编译器 | `<CCS_ROOT>\tools\compiler\ti-cgt-c2000_22.6.1.LTS` | 存在（COFF + EABI 运行库都在） |
 | CCS12 的 DSS | `<CCS_ROOT>\ccs_base\scripting\bin\dss.bat` | 存在 |
