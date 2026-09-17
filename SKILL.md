@@ -22,13 +22,13 @@ description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837
 
 ```powershell
 # ① 编译+链接自检（几秒出结果，不打开 CCS、不碰硬件）
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Jordon\.codebuddy\skills\ti-c2000-ccs-auto\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
 
 # ② 构建 + 下载运行（自动检测仿真器与 CCS 安装位置）
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Jordon\.codebuddy\skills\ti-c2000-ccs-auto\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
 
 # ③ 构建 + 下载运行 + 读回变量/寄存器（最完整的验证；自动轮询到就绪再采样）
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Jordon\.codebuddy\skills\ti-c2000-ccs-auto\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
 # 就绪判据默认取 -ReadVars 的第一项（变为非 0 即认为程序跑到位）；也可显式指定：
 #   ... -WaitFor "GpioCtrlRegs.GPADIR.bit.GPIO8 != 0" -RunMs 15000
 
@@ -128,7 +128,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | 双核 / 多核器件（F2837xD/F28379D/F2838x） | `-CorePattern ".*CPU1.*"` 选核；每个核各自一份 `.ccxml` 与 `.out` |
 | 用模拟器（无硬件） | ccxml 选 tisim，脚本自动跳过硬件检查；也可 `-NoProbeCheck` |
 | 追加链接脚本（Flash 版等） | `-LinkCmd "F2837xD_Flash_lnk_cpu1.cmd"` |
-| 指定编译器 / CCS | `-CompilerRoot <ti-cgt-c2000_x.y.z.LTS>`、`-CcsRoot F:\ccs` |
+| 指定编译器 / CCS | `-CompilerRoot <ti-cgt-c2000_x.y.z.LTS>`、`-CcsRoot <CCS安装目录>` |
 
 各型号的头文件名/链接脚本/运行库差异、仿真器枚举名对照、driverlib+SysConfig 工程的注意事项：
 见 [references/other-devices-and-probes.md](references/other-devices-and-probes.md)。

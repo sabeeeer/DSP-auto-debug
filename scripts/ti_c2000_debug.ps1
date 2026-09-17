@@ -11,7 +11,7 @@
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -Build -Run
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -Build -Run -RunMs 2000 -ReadVars "g_cnt,EPwm1Regs.TBPRD"
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -ReadOnly -ReadVars "EPwm1Regs.TBPRD"
-#     ... -CcsRoot F:\ccs     force a CCS installation
+#     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #   Exit code: 0 OK | 1 failure | 2 environment/toolchain problem | 3 no probe
 # =====================================================================
 param(

@@ -17,7 +17,7 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 ## 1. loadti（下载 / 复位运行）
 
 ```powershell
-& 'F:\ccs\ccs_base\scripting\examples\loadti\loadti.bat' `
+& '<CCS_ROOT>\ccs_base\scripting\examples\loadti\loadti.bat' `
     '-c=<工程>\targetConfigs\TMS320F28335.ccxml' -r -a '-t=180000' '<工程>\Debug\<工程名>.out'
 ```
 
@@ -35,7 +35,7 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 ## 2. DSS（脚本化调试会话）
 
 ```powershell
-& 'F:\ccs\ccs_base\scripting\bin\dss.bat' '<脚本>.js'
+& '<CCS_ROOT>\ccs_base\scripting\bin\dss.bat' '<脚本>.js'
 ```
 
 `scripts/dss_template.js` 是模板，占位符 `{{CCXML}} {{OUT}} {{RUN_MS}} {{VARS}} {{MODE}}` 由

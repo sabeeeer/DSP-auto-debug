@@ -13,7 +13,7 @@
 #
 #   Usage:
 #     powershell -ExecutionPolicy Bypass -File ti_c2000_build.ps1 -ProjectPath <proj>
-#     ... -CcsRoot F:\ccs                 force a CCS installation
+#     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #     ... -CompilerRoot <ti-cgt-c2000_x.y.z.LTS>
 #     ... -LinkCmd "extra1.cmd,extra2.cmd"  add linker command files
 #     ... -Clean | -Quiet | -NoStage
@@ -150,7 +150,8 @@ if (-not $cgRoot) {
     }
 }
 if (-not $cgRoot) {
-    $c = @(Get-ChildItem 'C:\ti', 'F:\ccs' -Recurse -Directory -Filter 'ti-cgt-c2000_*' -ErrorAction SilentlyContinue |
+    # last resort: TI default install locations (use -CcsRoot for anything else)
+    $c = @(Get-ChildItem 'C:\ti', "$env:USERPROFILE\ti" -Recurse -Directory -Filter 'ti-cgt-c2000_*' -ErrorAction SilentlyContinue |
            Sort-Object Name -Descending) | Select-Object -First 1
     if ($c) { $cgRoot = $c.FullName }
 }

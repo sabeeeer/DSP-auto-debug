@@ -2,22 +2,23 @@
 
 ## 工具链位置
 
+> 下表是**实测机器的示例布局**，`<CCS_ROOT>` / `<TI_C2000_EXAMPLES>` 请替换为你自己的实际路径；
+> 脚本本身不依赖这些固定路径（它会从注册表、`C:\ti`、`%USERPROFILE%\ti` 自动探测，或用 `-CcsRoot` / `-CompilerRoot` 指定）。
+
 | 用途 | 路径 | 状态 |
 |---|---|---|
-| **CCS 12.8.1.00005（主力）** | `F:\ccs`（注册表 `HKLM\SOFTWARE\Texas Instruments\Code Composer Studio 12.8.1.00005` → Location=F:\） | 已安装 |
-| CCS12 GUI | `F:\ccs\eclipse\ccstudio.exe` / 命令行 `eclipsec.exe` | 存在 |
-| CCS12 的 C2000 编译器 | `F:\ccs\tools\compiler\ti-cgt-c2000_22.6.1.LTS` | 存在（COFF + EABI 运行库都在） |
-| CCS12 的 DSS | `F:\ccs\ccs_base\scripting\bin\dss.bat` | 存在 |
-| CCS12 的 loadti | `F:\ccs\ccs_base\scripting\examples\loadti\loadti.bat` | 存在 |
-| CCS12 的 make | `F:\ccs\utils\bin\gmake.exe` | 存在 |
-| CCS 6（备选，老工程用） | `C:\ti\ccsv6`（另有安装包 `F:\CCS6\CCS6.1.3.00034_win32`） | 已安装 |
+| **CCS 12.x（主力）** | `<CCS_ROOT>`（例：`F:\ccs`；注册表 `HKLM\SOFTWARE\Texas Instruments\Code Composer Studio <版本>` 的 `Location` 指向它） | 已安装 |
+| CCS12 GUI | `<CCS_ROOT>\eclipse\ccstudio.exe`（命令行 `eclipsec.exe`） | 存在 |
+| CCS12 的 C2000 编译器 | `<CCS_ROOT>\tools\compiler\ti-cgt-c2000_22.6.1.LTS` | 存在（COFF + EABI 运行库都在） |
+| CCS12 的 DSS | `<CCS_ROOT>\ccs_base\scripting\bin\dss.bat` | 存在 |
+| CCS12 的 loadti | `<CCS_ROOT>\ccs_base\scripting\examples\loadti\loadti.bat` | 存在 |
+| CCS12 的 make | `<CCS_ROOT>\utils\bin\gmake.exe` | 存在 |
+| CCS 6（备选，老工程用） | `C:\ti\ccsv6`（TI 默认安装位置） | 已安装 |
 | CCS6 的 C2000 编译器 | `C:\ti\ccsv6\tools\compiler\ti-cgt-c2000_15.12.1.LTS` | 存在 |
 | CCS6 的 DSS / loadti | `C:\ti\ccsv6\ccs_base\scripting\{bin\dss.bat, examples\loadti\loadti.bat}` | 存在 |
-| 目标配置 | `<工程>\targetConfigs\TMS320F28335.ccxml` | XDS100v1 + TMS320F28335 |
-| 头文件来源 | `E:\DSP8233x_ProjectExample\DSP2833x_Libraries\DSP2833x_common\include`、`...\DSP2833x_headers\include` | 工程 `.cproject` 用绝对路径引用 E 盘，**编译硬依赖** |
+| 目标配置 | `<工程>\targetConfigs\*.ccxml`（实测为 `TMS320F28335.ccxml`） | XDS100v1 + TMS320F28335 |
+| 头文件来源 | `<TI_C2000_EXAMPLES>\DSP2833x_Libraries\DSP2833x_common\include`、`...\DSP2833x_headers\include` | 工程 `.cproject` 用绝对路径引用，**编译硬依赖**（换机器要同步改 include 路径） |
 | 仿真器 | XDS100（Windows 枚举为 `XDS100 Class USB Serial Port (COM9)` / `XDS100 Class Debug Port` / `XDS100 Class Auxiliary Port`） | 已连接可用 |
-
-`D:\ti` 目前为空目录，不要在那里找工具。
 
 ## 已验证（有实测证据）
 
@@ -28,7 +29,7 @@
 - **失败可判定**：语法错误 → cl2000 非零退出 + `error #29`；未定义符号 → 链接退出码 1 且不产出 `.out`（实测 `neg.out_exists=False`）。
 - **CCS12 全自动调试闭环（实测成功）**：
   `ti_c2000_debug.ps1 -Build -Run -RunMs 4000 -ReadVars "PC,EPwm1Regs.TBPRD,..."` →
-  自动检测到 `F:\ccs`、用 22.6.1 构建、DSS 连接 XDS100、加载、`target.restart()`、运行、停机读回：
+  自动检测到 CCS12 安装目录、用 22.6.1 构建、DSS 连接 XDS100、加载、`target.restart()`、运行、停机读回：
   `TBPRD=65535`、`CMPA.all=0xCCCC0000`(即 CMPA=0xCCCC=52428=65535×80%)、`TBCTL.CLKDIV=3`、
   `GPADIR.bit.GPIO8=1`(OLED 初始化已执行)、`GPAMUX1.bit.GPIO0=1`(EPWM1A 复用已配置)、`SCILBAUD=39`(115200bps)
   → 与 `User/main.c` 逐项吻合。
@@ -39,7 +40,7 @@
 1. **不要用 CCS 无界面构建**：`eclipsec -application org.eclipse.cdt.managedbuilder.core.headlessbuild -import <proj> -build <proj>/Debug`
    生成的 `Debug/*/subdir_rules.mk` 里编译器路径为**空字符串** → `CreateProcess("") failed` / `make (e=87)`。
    加 `-product com.ti.ccstudio.branding.product` 只修好顶层 `makefile`，subdir 片段仍为空。自动构建请走本 skill 的脚本。
-2. 工程里原有的 `Debug/makefile` 是 **CCS12（`F:/ccs/tools/compiler/ti-cgt-c2000_22.6.1.LTS`）** 生成的（不是"别的机器拷来的"）。
+2. 工程里原有的 `Debug/makefile` 是 **CCS12（`<CCS_ROOT>/tools/compiler/ti-cgt-c2000_22.6.1.LTS`）** 生成的（不是"别的机器拷来的"）。
    这些自动生成的 `*.mk` 已被清掉，CCS 下次构建会自己重新生成；若 GUI 报找不到编译器，看 `Debug/makefile` 的 `CG_TOOL_ROOT`。
 3. **RAM 程序 + 复位**：板上复位后默认跑的是**Flash 里的旧程序**（实测读到它配的 `TBPRD=7500`/`CLKDIV=0`）。
    所以"加载后能不能跑"取决于有没有把 PC 指到程序入口——DSS 里用 `target.restart()`，或显式

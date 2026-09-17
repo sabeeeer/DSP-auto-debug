@@ -68,4 +68,5 @@
 - **引脚分配**：`project-map.md` 的引脚表只适用于当前这块 28335 板；新板子按新工程的 `APP/*` 源码重新整理（skill 会按新工程读源码找 GPIO 配置）。
 - **Flash 脱机运行**：把链接脚本换成 Flash 版（`-LinkCmd` 或改 `.cproject` 的 `LINKER_COMMAND_FILE`），并确认 boot 引脚/CSM 设置。
 - **时钟与看门狗**：不同器件 `InitSysCtrl()` 内容不同（本项目 `DSP2833x_SysCtrl.c` 已 `DisableDog()`）。
-- **头文件来源**：本项目头文件在 `E:\DSP8233x_ProjectExample\...`，换机器/换 SDK 要同步更新 `.cproject` 的 include 路径（脚本会打印缺失的路径）。
+- **头文件来源**：实测工程的器件头文件放在工程外的 `<TI_C2000_EXAMPLES>\DSP2833x_Libraries\...`（TI 官方 example 包），
+  换机器/换 SDK 要同步更新 `.cproject` 的 include 路径（脚本会打印缺失的路径）。

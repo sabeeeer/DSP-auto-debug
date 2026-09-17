@@ -71,7 +71,7 @@
 ## 工具链（实测）
 
 - `.cproject` 声明 `OPT_CODEGEN_VERSION = 15.12.1.LTS`、`OUTPUT_FORMAT = COFF`、`LINKER_COMMAND_FILE = 28335_RAM_lnk.cmd`。
-- 该工程**两个编译器都验证通过**：CCS12 自带的 `ti-cgt-c2000_22.6.1.LTS`（`F:\ccs`，日常用它）与 CCS6 的 `15.12.1.LTS`（`C:\ti\ccsv6`）。
+- 该工程**两个编译器都验证通过**：CCS12 自带的 `ti-cgt-c2000_22.6.1.LTS`（日常用它）与 CCS6 的 `15.12.1.LTS`（`C:\ti\ccsv6`）。
 - 自动构建脚本按"**.cproject 声明的版本优先，没有就用该 CCS 自带的新版**"选择编译器，并自动挑运行库（COFF→`rts2800_fpu32.lib`，EABI→`*_eabi.lib`）。
 - `Debug/` 里的 `makefile / subdir_*.mk` 是 CCS 自动生成的，不要手改；已被清理过一次，CCS GUI 构建时会重新生成。
 
