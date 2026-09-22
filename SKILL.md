@@ -23,6 +23,7 @@ description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837
 ```powershell
 # ① 编译+链接自检（几秒出结果，不打开 CCS、不碰硬件）
 powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
+#   ... -IgnoreExclusions   把 .cproject 里 "exclude from build" 的源码/.cmd/.lib 也算进来（默认照 CCS 跳过）
 
 # ② 构建 + 下载运行（自动检测仿真器与 CCS 安装位置）
 powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
@@ -39,11 +40,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_de
 脚本输出英文（避免 PowerShell 中文编码问题），**判定只看 `RESULT: OK` / `RESULT: FAIL`**。
 失败会打印前 25 条错误、错误原因和完整日志路径（`Debug\auto_build\build.log`）。
 
+自检输出先看这几行：`CONFIG:` = 所用构建配置（多配置工程按"工程下存在同名输出目录"选）、
+`DEFINES:`/`OPTIONS:` = 与 CCS 一致的宏与优化开关（同名 `#ifdef` 分支才会被编到）、
+`EXCLUDED:` = 按 `.cproject` 的 "exclude from build" 跳过的源码 / `.cmd` / `.lib`（照 CCS 的真实构建行为，
+所以工程里堆着别的器件的 `*Headers*.cmd`、被排除的 `.c` 也不会再误报 `LINK_ERRORS`）。
+
 ## 全自动闭环 SOP
 
 1. **写代码**：新模块放 `APP/<模块名>/<模块名>.c|.h`；`main` 只放 `User/main.c`。
    新增目录**必须**把路径加进 `.cproject` 的 `compilerID.INCLUDE_PATH`，否则 `cannot open source file`。
 2. **自检**：跑 ① 。编译错误按 `文件, 行号: error #xxx` 定位；链接错误看未定义符号名。
+   先扫 `CONFIG:` / `DEFINES:` / `EXCLUDED:` 三行：配置或宏不对 = 读错了 `.cproject` 的配置段；
+   `EXCLUDED:` 是照 CCS 的 "exclude from build" 跳过的源码 / `.cmd` / `.lib`（别的器件的 cmd 就在这一步被挡掉）。
 3. **产物**：`.out` 落在 `Debug\auto_build\<工程名>.out`，并同步一份到 `Debug\<工程名>.out`（调试器/loadti 加载它）。
 4. **进调试器**：跑 ② 或 ③ 。脚本先检测 XDS 仿真器，在线才连；`-ReadVars` 走 DSS：**加载 → 复位并跳到程序入口 → 运行 → 停机 → 读表达式**。
 5. **看结果**：脚本会先轮询就绪（`DSS: ready (...) after N ms`），再逐条打印 `VAR xxx = 值`，对着源码核对
@@ -120,7 +128,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 
 ## 换型号 / 换仿真器 / 双核
 
-**不用改脚本**——构建脚本已把型号相关的部分全部改成从 `.cproject` 反推（汇编器版本 `-v28/-v29`、`-ml/-mt`、浮点 `fpu32/fpu64/softlib`、输出格式 COFF/EABI、运行库 `rts2800_*`、链接脚本与 `*Headers*.cmd`），并在日志里打印 `DEVICE:` 指纹便于确认。
+**不用改脚本**——构建脚本已把型号相关的部分全部改成从 `.cproject` 反推（汇编器版本 `-v28/-v29`、`-ml/-mt`、浮点 `fpu32/fpu64/softlib`、输出格式 COFF/EABI、运行库 `rts2800_*`、**全部非 exclude 的 `.cmd`/`.lib`**、`DEFINE`/`OPT_LEVEL`/`OPT_FOR_SPEED`/`FP_MODE` 等编译开关），并在日志里打印 `DEVICE:` / `CONFIG:` / `DEFINES:` 便于确认。
 
 | 需求 | 参数 |
 |---|---|
@@ -144,6 +152,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 |---|---|---|
 | `COMPILE_ERRORS` | C 语法/头文件错误 | 按 `文件, 行号: error #xxx` 改代码，完整日志 `Debug\auto_build\build.log` |
 | `LINK_ERRORS` | 未定义符号等链接错误 | 按未定义符号名反查：源文件没进工程 / 函数名不符 / 少 include 路径 |
+| `memory range has already been specified` / `symbol "..." redefined` | "把不该参与构建的东西链进来了"。脚本已按 `.cproject` 的 exclude 列表跳过这类源码 / `.cmd` / `.lib`（输出里有 `EXCLUDED:` 行）；仍出现就核对 `.cproject` 是否漏 exclude，或用 `-IgnoreExclusions` 复现原组合对比 |
 | `TIMEOUT` | 就绪条件在上限内没成立 | 加大 `-RunMs` 或修 `-WaitFor`；若确实卡住，用「读 PC + map 文件」定位卡在哪个函数 |
 | `CONNECT_FAILED` | 打不开调试会话（连 ccxml 都没解析成功） | 查 ccxml 是否有效、JTAG 是否被 CCS GUI 占用、板子是否上电、`-CorePattern` 核是否选对 |
 | `LOADTI_ERROR` / `LOADTI_TIMEOUT` | loadti 报错 / 超时没出现 `Done` | 看打印出的原始错误行；加大 `-TimeoutSec`；确认探针与板子 |

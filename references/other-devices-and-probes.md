@@ -16,7 +16,11 @@
 | 运行库 | 上两项 + `lib` 目录实际文件 | `rts2800_fpu32(_eabi).lib`、`rts2800_fpu64_eabi.lib`、`rts2800_ml.lib` |
 | 编译器 | `OPT_CODEGEN_VERSION` → 对应 CCS 的 `ti-cgt-c2000_<ver>` | 声明的版本没装则用该 CCS 自带最新版并打 NOTE |
 | 包含路径 | `INCLUDE_PATH` | 解析 `${workspace_loc}`、`${CG_TOOL_ROOT}`，缺失目录只打 NOTE |
-| 链接脚本 | `LINKER_COMMAND_FILE` + 名字含 `Headers` 的 `.cmd` | 其他 `.cmd`（Flash 版等）只提示不链接，用 `-LinkCmd` 显式加 |
+| 链接脚本 | 工程里**全部非 exclude 的** `.cmd` | CCS 托管构建会把工程里每个 `.cmd` 都交给链接器（`LINKER_COMMAND_FILE` 只是其中一个），所以别的器件的 cmd 必须在 `.cproject` 里 "exclude from build"；被 exclude 的自动跳过并打 `EXCLUDED:` |
+| 库文件 | 工程里**全部非 exclude 的** `.lib` | 同 `.cmd`；工程自带同名运行库时优先用工程的，不再重复塞编译器自带的 |
+| 编译开关 | `DEFINE` / `OPT_LEVEL` / `OPT_FOR_SPEED` / `FP_MODE` / `LANGUAGE_MODE` / `DIAG_*` / `OTHER_FLAGS` | 与 CCS 编同一批 `#ifdef` 分支（否则校验的代码和板子上跑的不是一套） |
+| 构建配置 | `<configuration name="...">` | 多配置工程按"工程下存在同名输出目录"选，其次名字/父配置含 `Debug` 的；`CONFIG:` 行会打印用了哪个 |
+| exclude 列表 | `<sourceEntries><entry excluding="a\|b\|dir/">` | 源码 / `.cmd` / `.lib` 一律照 CCS 跳过；需要"全都算进来"时加 `-IgnoreExclusions` |
 | 器件指纹 | 头文件存在性 | 打印 `DEVICE: F2837xD_Device.h` 之类，driverlib 工程提示 EABI |
 
 `ti_c2000_debug.ps1` 从 `.ccxml` 读器件与仿真器，硬件检查覆盖多种探针；模拟器目标自动跳过硬件检查。

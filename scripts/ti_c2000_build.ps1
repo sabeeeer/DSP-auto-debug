@@ -16,8 +16,22 @@
 #     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #     ... -CompilerRoot <ti-cgt-c2000_x.y.z.LTS>
 #     ... -LinkCmd "extra1.cmd,extra2.cmd"  add linker command files
+#     ... -IgnoreExclusions                also build/link resources excluded in .cproject
 #     ... -Clean | -Quiet | -NoStage
 #   Exit code: 0 = compile AND link OK, 1 = failed, 2 = environment problem
+#
+#   What CCS really builds (and this script mirrors):
+#     * sources: every .c/.asm under the project EXCEPT the ones listed in
+#       <sourceEntries><entry excluding="a|b|...">  (real projects keep other
+#       devices' sources in the tree and "exclude from build" them)
+#     * linker inputs: the *.cmd and *.lib files in the project EXCEPT excluded ones.
+#       CCS passes them all to the linker (LINKER_COMMAND_FILE is just one of them),
+#       so blindly taking every "*Headers*.cmd" fails on projects that also keep
+#       F2803x/F2802x/F2806x cmd files:
+#         error #10263: ... memory range has already been specified
+#         error #10264: ... memory range overlaps existing memory range ...
+#       and compiling excluded sources fails with:
+#         error #10056: symbol "..." redefined
 # =====================================================================
 param(
     [string]$ProjectPath  = "",
@@ -27,7 +41,8 @@ param(
     [string]$OutputDir    = "",
     [switch]$Clean,
     [switch]$Quiet,
-    [switch]$NoStage
+    [switch]$NoStage,
+    [switch]$IgnoreExclusions
 )
 
 $ErrorActionPreference = 'Continue'   # native compiler stderr must not abort the loop
@@ -99,16 +114,81 @@ if (Test-Path (Join-Path $ProjectPath '.project')) {
         if ($prj.projectDescription.name) { $projName = $prj.projectDescription.name }
     } catch { }
 }
+# ---- pick the build configuration whose options are used ----
+# A .cproject may declare several configurations (Debug / Release / F2837xD_CPU1 ...) plus a
+# <refreshScope> block that also contains <configuration> nodes but has no @id - those must not
+# be mistaken for a build configuration.  CCS writes its build output into <project>\<配置名>,
+# so an existing folder with the configuration's name is the strongest hint; then a name/parent
+# containing "Debug"; then the first one.
+$cfgCands = @($cproj.SelectNodes('//configuration[@id]'))
+$cfg = $null
+foreach ($c in $cfgCands) {
+    $nm = [string]$c.name
+    if ($nm -and (Test-Path -LiteralPath (Join-Path $ProjectPath $nm))) { $cfg = $c; break }
+}
+if (-not $cfg) { foreach ($c in $cfgCands) { if ([string]$c.name -match 'Debug' -or [string]$c.parent -match 'Debug') { $cfg = $c; break } } }
+if (-not $cfg -and $cfgCands.Count -gt 0) { $cfg = $cfgCands[0] }
+$cfgId = ''; $cfgName = ''
+if ($cfg) { $cfgId = [string]$cfg.id; $cfgName = [string]$cfg.name }
+
 function Get-OptionNode([string]$idPart) {
+    if ($cfgId) {
+        $n = $cproj.SelectSingleNode("//cconfiguration[@id='$cfgId']//option[contains(@id,'$idPart')]")
+        if (-not $n) { $n = $cproj.SelectSingleNode("//cconfiguration[@id='$cfgId']//option[contains(@superClass,'$idPart')]") }
+        if ($n) { return $n }
+    }
     $n = $cproj.SelectSingleNode("//cconfiguration[contains(@id,'Debug')]//option[contains(@id,'$idPart')]")
     if (-not $n) { $n = $cproj.SelectSingleNode("//option[contains(@id,'$idPart')]") }
     if (-not $n) { $n = $cproj.SelectSingleNode("//option[contains(@superClass,'$idPart')]") }
     return $n
 }
+
+# list-valued option (--define, --include_path, --search_path, --diag_suppress, ...)
+function Get-OptionList([string]$idPart) {
+    $vals = @()
+    $node = Get-OptionNode $idPart
+    if ($node) {
+        foreach ($v in $node.listOptionValue) {
+            $s = ([string]$v.value).Trim()
+            if ($s) { $vals += $s }
+        }
+    }
+    return $vals
+}
 function Get-OptionValue([string]$idPart, [string]$default = "") {
     $n = Get-OptionNode $idPart
     if ($n -and $n.value) { return [string]$n.value }
     return $default
+}
+
+# ---- "exclude from build" list declared in .cproject ----
+# Eclipse stores it as  <sourceEntries><entry excluding="a|b|dir/|..."/>  (project relative,
+# '/'-separated; a trailing '/' means a whole folder).  CCS does not compile or link these,
+# so neither may this script - otherwise a project that keeps another device's commands
+# files / sources in the tree reports bogus LINK_ERRORS.
+$excludeFiles = New-Object System.Collections.ArrayList
+$excludeDirs  = New-Object System.Collections.ArrayList
+foreach ($entry in $cproj.SelectNodes('//sourceEntries/entry')) {
+    $ex = [string]$entry.excluding
+    if (-not $ex) { continue }
+    foreach ($e in ($ex -split '\|')) {
+        $p = $e.Trim().Replace('\', '/').TrimStart('/')
+        if (-not $p) { continue }
+        if ($p.EndsWith('/')) { [void]$excludeDirs.Add($p) } else { [void]$excludeFiles.Add($p) }
+    }
+}
+function Test-Excluded([string]$fullPath) {
+    if ($IgnoreExclusions) { return $false }
+    if ($excludeFiles.Count -eq 0 -and $excludeDirs.Count -eq 0) { return $false }
+    $rel = $fullPath.Substring($script:ProjectPath.Length).TrimStart('\', '/').Replace('\', '/')
+    foreach ($d in $excludeDirs) {
+        if ($rel.StartsWith($d, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    foreach ($x in $excludeFiles) {
+        if ($rel.Equals($x, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+        if ($rel.StartsWith($x + '/', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
 }
 
 # ---- codegen / device knobs straight from the project ----
@@ -125,6 +205,28 @@ $n = $cproj.SelectSingleNode("//listOptionValue[contains(@value,'OUTPUT_FORMAT='
 if ($n) { $outFormat = ([string]$n.value) -replace '.*OUTPUT_FORMAT=', '' }
 $romModel = '--rom_model'
 if ((Get-OptionValue 'linkerID.RAM_MODEL') -eq 'true') { $romModel = '--ram_model' }
+
+# ---- the rest of the project's switches, so exactly the same code paths get compiled ----
+# (without -D the #ifdef FLASH / #ifdef PC_COMMU_ENABLE ... branches are compiled differently
+#  from CCS and the check would validate something the board never runs)
+$defines = @(Get-OptionList 'compilerID.DEFINE')
+$optLevel = ''
+$v = Get-OptionValue 'compilerID.OPT_LEVEL'
+if ($v -match 'OPT_LEVEL\.(\d+)\s*$') { $optLevel = "-O" + $Matches[1] }
+$mfOpt = ''
+$v = Get-OptionValue 'compilerID.OPT_FOR_SPEED'
+if ($v -match 'OPT_FOR_SPEED\.(\d+)\s*$') { $mfOpt = "-mf" + $Matches[1] }
+$fpMode = ''
+$v = Get-OptionValue 'compilerID.FP_MODE'
+if ($v -match 'FP_MODE\.(\w+)\s*$') { $fpMode = "--fp_mode=" + $Matches[1] }
+$relaxedAnsi = ((Get-OptionValue 'compilerID.LANGUAGE_MODE') -match 'RELAXED_ANSI')
+$diagWarn = @(Get-OptionList 'compilerID.DIAG_WARNING')
+if ($diagWarn.Count -eq 0) { $diagWarn = @('225') }
+$diagSuppress = @(Get-OptionList 'compilerID.DIAG_SUPPRESS')
+$otherFlags   = @(Get-OptionList 'compilerID.OTHER_FLAGS')
+$lnkSearch    = @(Get-OptionList 'linkerID.SEARCH_PATH')
+$lnkDiagSupp  = @(Get-OptionList 'linkerID.DIAG_SUPPRESS')
+$lnkPriority  = (Get-OptionValue 'linkerID.PRIORITY') -eq 'true'
 
 # ---- compiler root ----
 $cgRoot = ""
@@ -173,7 +275,9 @@ foreach ($p in $rawInc) {
     $q = $q -replace '/', '\'
     $q = $q.Trim('"').TrimEnd('}')
     if ($q -and -not (Test-Path -LiteralPath $q)) {
-        Info "NOTE    : include path missing on disk, skipped -> $q"
+        # 工程里声明的 include 目录在磁盘上不存在（换机器/挪目录常见）：CCS 会直接报错，
+        # 这里跳过它继续编译，但必须显眼提示，否则后面的 "cannot open source file" 很难定位。
+        Info "WARNING : include path missing on disk, skipped -> $q"
         continue
     }
     $includes += $q
@@ -208,9 +312,15 @@ foreach ($c in $rtsCandidates) { if (Test-Path (Join-Path $cgRoot "lib\$c")) { $
 if (-not $rts) { Fail "no runtime library found under $cgRoot\lib (tried: $($rtsCandidates -join ', '))" 2 'ENV_NO_RUNTIME' }
 
 Info ("DEVICE  : {0}{1}" -f $(if ($devHdr) { $devHdr } else { '<unknown device header>' }), $devNote)
+Info ("CONFIG  : {0}{1}" -f $(if ($cfgName) { $cfgName } else { '<first configuration>' }),
+      $(if ($IgnoreExclusions) { '   (-IgnoreExclusions)' } else { '' }))
 Info ("COMPILER: {0}" -f $cgRoot)
-Info ("OPTIONS : -v{0}{1}{2} {3} | {4} | runtime {5}" -f $siliconVer,
-      $(if ($largeMem) { ' -ml' } else { '' }), $(if ($unified) { ' -mt' } else { '' }), $floatFlag, $outFormat, $rts)
+Info ("OPTIONS : -v{0}{1}{2} {3}{4}{5}{6}{7} | {8} | runtime {9}" -f $siliconVer,
+      $(if ($largeMem) { ' -ml' } else { '' }), $(if ($unified) { ' -mt' } else { '' }), $floatFlag,
+      $(if ($optLevel) { " $optLevel" } else { '' }), $(if ($mfOpt) { " $mfOpt" } else { '' }),
+      $(if ($fpMode) { " $fpMode" } else { '' }), $(if ($relaxedAnsi) { ' --relaxed_ansi' } else { '' }),
+      $outFormat, $rts)
+Info ("DEFINES : {0}" -f $(if ($defines.Count -gt 0) { ($defines -join ', ') } else { '<none>' }))
 
 # ---- linker command files ----
 $lnkCmd = ""
@@ -224,9 +334,16 @@ if ($lnkCmd) {
 }
 $allCmd = @(Get-ChildItem -Path $ProjectPath -Recurse -Filter '*.cmd' -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -notmatch '\\Debug\\' })
-# device peripheral header cmd (DSP2833x_Headers_nonBIOS.cmd / F2837xD_Headers_nonBIOS_cpu1.cmd / ...)
-$cmdFiles += @($allCmd | Where-Object { $_.Name -match 'Headers' -and ($cmdFiles -notcontains $_.FullName) } |
-               ForEach-Object { $_.FullName })
+$cmdExcluded = @($allCmd | Where-Object { Test-Excluded $_.FullName })
+$cmdActive   = @($allCmd | Where-Object { -not (Test-Excluded $_.FullName) } | Sort-Object Name)
+# CCS 的托管构建会把工程里每个 *.cmd 都交给链接器（别的芯片的 cmd 必须"exclude from build"
+# 才不参与，正是这个原因），所以这里也全部收进来，而不是只挑名字带 Headers 的。
+foreach ($f in $cmdActive) {
+    if ($cmdFiles -notcontains $f.FullName) { $cmdFiles += $f.FullName }
+}
+if ($cmdExcluded.Count -gt 0) {
+    Info ("EXCLUDED: .cmd skipped (exclude from build in .cproject): " + (($cmdExcluded | ForEach-Object { $_.Name }) -join ', '))
+}
 if ($LinkCmd) {
     foreach ($c in ($LinkCmd -split ',')) {
         $cn = $c.Trim()
@@ -239,15 +356,20 @@ if ($LinkCmd) {
         else { Fail "-LinkCmd file not found: $cn" 2 'ENV_BAD_ARG' }
     }
 }
-$unusedCmd = @($allCmd | Where-Object { $cmdFiles -notcontains $_.FullName })
+$unusedCmd = @($cmdActive | Where-Object { $cmdFiles -notcontains $_.FullName })
 if ($unusedCmd.Count -gt 0) {
     Info ("NOTE    : .cmd files NOT linked (use -LinkCmd to add): " + (($unusedCmd | ForEach-Object { $_.Name }) -join ', '))
 }
 if ($cmdFiles.Count -eq 0) { Info "WARNING : no linker command file used - the link will probably fail" }
 
-# ---- libraries referenced by the project ----
-$libs = @(Get-ChildItem -Path $ProjectPath -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
-          Where-Object { $_.FullName -notmatch '\\Debug\\' } | ForEach-Object { $_.FullName })
+# ---- libraries referenced by the project (same rule: every *.lib except excluded ones) ----
+$allLibs = @(Get-ChildItem -Path $ProjectPath -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+             Where-Object { $_.FullName -notmatch '\\Debug\\' })
+$libExcluded = @($allLibs | Where-Object { Test-Excluded $_.FullName })
+$libs = @($allLibs | Where-Object { -not (Test-Excluded $_.FullName) } | ForEach-Object { $_.FullName })
+if ($libExcluded.Count -gt 0) {
+    Info ("EXCLUDED: .lib skipped (exclude from build in .cproject): " + (($libExcluded | ForEach-Object { $_.Name }) -join ', '))
+}
 
 # ---------- 4. sources ----------
 $srcRoots = @()
@@ -256,10 +378,14 @@ foreach ($sub in @('APP', 'User', 'DSP2833x_Libraries')) {
     if (Test-Path $p) { $srcRoots += $p }
 }
 if ($srcRoots.Count -eq 0) { $srcRoots = @($ProjectPath) }
-$cfiles = @(Get-ChildItem -Path $srcRoots -Recurse -File -Include '*.c', '*.asm' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '\\Debug\\' -and $_.FullName -notmatch '\\auto_build\\' } |
-            ForEach-Object { $_.FullName })
+$srcAll = @(Get-ChildItem -Path $srcRoots -Recurse -File -Include '*.c', '*.asm' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\Debug\\' -and $_.FullName -notmatch '\\auto_build\\' })
+$srcExcluded = @($srcAll | Where-Object { Test-Excluded $_.FullName })
+$cfiles = @($srcAll | Where-Object { -not (Test-Excluded $_.FullName) } | ForEach-Object { $_.FullName })
 if ($cfiles.Count -eq 0) { Fail "no C/ASM sources found under: $($srcRoots -join ', ')" 2 'NO_SOURCES' }
+if ($srcExcluded.Count -gt 0) {
+    Info ("EXCLUDED: source skipped (exclude from build in .cproject): " + (($srcExcluded | ForEach-Object { $_.Name }) -join ', '))
+}
 Info "SOURCES : $($cfiles.Count) file(s)"
 
 # ---------- 5. output dir ----------
@@ -273,18 +399,33 @@ $logFile = Join-Path $OutputDir 'build.log'
 $log = New-Object System.Collections.Generic.List[string]
 
 # ---------- 6. compile ----------
-$cflags = @("-v$siliconVer", '-g', '--display_error_number', '--diag_warning=225', '--diag_wrap=off', '-c')
+$cflags = @("-v$siliconVer", '-g', '--display_error_number', '--diag_wrap=off', '-c')
 if ($largeMem) { $cflags += '-ml' }
 if ($unified)  { $cflags += '-mt' }
 $cflags += $floatFlag
+if ($optLevel)    { $cflags += $optLevel }
+if ($mfOpt)       { $cflags += $mfOpt }
+if ($fpMode)      { $cflags += $fpMode }
+if ($relaxedAnsi) { $cflags += '--relaxed_ansi' }
+foreach ($d in $diagWarn)     { $cflags += "--diag_warning=$d" }
+foreach ($d in $diagSuppress) { $cflags += "--diag_suppress=$d" }
+foreach ($d in $otherFlags)   { $cflags += $d }
+foreach ($d in $defines)      { $cflags += "-D$d" }
 $incArgs = @()
 foreach ($i in $includes) { $incArgs += "--include_path=$i" }
 
 $compileErrors = @()
 $warningCount = 0
 $idx = 0
+$dupBase = @{}
+foreach ($f in $cfiles) {
+    $b = [IO.Path]::GetFileNameWithoutExtension($f)
+    if ($dupBase.ContainsKey($b)) { $dupBase[$b] = $true } else { $dupBase[$b] = $false }
+}
+$renameNote = @()
 foreach ($f in $cfiles) {
     $idx++
+    $base = [IO.Path]::GetFileNameWithoutExtension($f)
     if (-not $Quiet) { Write-Output ("[{0,3}/{1}] {2}" -f $idx, $cfiles.Count, (Split-Path $f -Leaf)) }
     $out = & $cl2000 @cflags @incArgs "--obj_directory=$objDir" $f 2>&1
     $code = $LASTEXITCODE
@@ -299,6 +440,22 @@ foreach ($f in $cfiles) {
         }
     }
     if ($code -ne 0) { $compileErrors += "FAILED FILE: $f" }
+    # 不同目录下的同名源文件会写进同一个 <名字>.obj，后编译的会把先前的覆盖掉（链接就会漏模块）
+    # -> 立刻改名，保证每个源文件都有独立目标文件
+    if ($code -eq 0 -and $dupBase[$base]) {
+        $objPath = Join-Path $objDir "$base.obj"
+        if (Test-Path -LiteralPath $objPath) {
+            $parent  = Split-Path (Split-Path $f -Parent) -Leaf
+            $newName = "${base}_${parent}.obj"
+            $k = 1
+            while (Test-Path -LiteralPath (Join-Path $objDir $newName)) { $newName = "${base}_${parent}$k.obj"; $k++ }
+            Move-Item -LiteralPath $objPath -Destination (Join-Path $objDir $newName) -Force
+            $renameNote += "$base.obj->$newName"
+        }
+    }
+}
+if ($renameNote.Count -gt 0) {
+    Info ("NOTE    : duplicate source names got unique objects: " + ($renameNote -join ', '))
 }
 
 # ---------- 7. link ----------
@@ -310,11 +467,29 @@ if ($compileErrors.Count -eq 0) {
     $lflags = @("-v$siliconVer", '-g', '--display_error_number', '--diag_warning=225', '--diag_wrap=off', '-z',
                "-m$OutputDir\$projName.map", "--stack_size=$stackSz", '--warn_sections',
                "-i$cgRoot\lib", "-i$cgRoot\include", '--reread_libs', $romModel)
+    if ($lnkPriority) { $lflags += '--priority' }
+    foreach ($d in $lnkDiagSupp) { $lflags += "--diag_suppress=$d" }
+    # 工程自己声明的库搜索路径（--search_path），宏展开后只保留磁盘上存在的
+    foreach ($p in $lnkSearch) {
+        $q = ([string]$p).Trim('"')
+        $q = $q.Replace('${workspace_loc:/${ProjName}}', $ProjectPath)
+        $q = $q.Replace('${workspace_loc:/${ProjName}/', ($ProjectPath + '\'))
+        $q = $q.Replace('${ProjName}', $projName)
+        $q = $q.Replace('${CG_TOOL_ROOT}', $cgRoot)
+        $q = $q -replace '/', '\'
+        $q = $q.TrimEnd('}')
+        if ($q -and (Test-Path -LiteralPath $q)) { $lflags += "-i$q" }
+    }
     $lnkArgs = @()
     foreach ($o in $objs) { $lnkArgs += $o }
     foreach ($c in $cmdFiles) { $lnkArgs += $c }
     foreach ($l in $libs) { $lnkArgs += $l }
-    $lnkArgs += (Join-Path $cgRoot "lib\$rts")
+    # 运行库：工程自带同名库时以工程的为准（CCS 就是这么链的），不要重复塞编译器自带的
+    if (@($libs | Where-Object { (Split-Path $_ -Leaf) -ieq $rts }).Count -gt 0) {
+        Info ("NOTE    : runtime library taken from the project: $rts")
+    } else {
+        $lnkArgs += (Join-Path $cgRoot "lib\$rts")
+    }
     $lnkArgs += "-o$outFile"
     $out = & $cl2000 @lflags @lnkArgs 2>&1
     $code = $LASTEXITCODE
@@ -339,6 +514,7 @@ Write-Output ""
 Write-Output "================ BUILD SUMMARY ================"
 Write-Output ("project   : {0}" -f $projName)
 Write-Output ("device    : {0}{1}" -f $(if ($devHdr) { $devHdr } else { 'unknown' }), $devNote)
+Write-Output ("config    : {0}" -f $(if ($cfgName) { $cfgName } else { '<first configuration>' }))
 Write-Output ("compiler  : {0}" -f $cgRoot)
 Write-Output ("linkcmd   : {0}" -f (($cmdFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ', '))
 Write-Output ("sources   : {0}   warnings: {1}" -f $cfiles.Count, $warningCount)
