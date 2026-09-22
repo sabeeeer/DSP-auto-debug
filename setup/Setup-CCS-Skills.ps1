@@ -18,9 +18,16 @@
 #     powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 `
 #         -GitSource ..\git-management -GitName "your-login" -GitEmail "you@example.com" `
 #         -Proxy http://127.0.0.1:12450
+#
+#   Installing for another agent (the SKILL.md payload is agent agnostic, see docs/portability.md):
+#     ... -Target claude      -> ~/.claude/skills/ti-c2000-ccs-auto   (hooks skipped)
+#     ... -Target codex       -> ~/.codex/skills/ti-c2000-ccs-auto    (hooks skipped)
+#     ... -Target custom -SkillsRoot D:\some\agent\skills
+#     ... -NoHooks            -> never touch ~/.codebuddy/settings.json
 #   Exit code: 0 ok | 1 failure | 2 argument/environment problem
 # =====================================================================
 param(
+    [string]$Target      = 'codebuddy',           # codebuddy | claude | codex | custom
     [string]$SkillsRoot  = (Join-Path $HOME '.codebuddy\skills'),
     [string]$GitSource   = "",                    # folder of the git-snapshot skill repo (optional)
     [string]$GitName     = "",                    # global git user.name  (optional)
@@ -28,10 +35,24 @@ param(
     [string]$Proxy       = "",                    # e.g. http://127.0.0.1:12450 (optional)
     [switch]$ClearProxy,                          # remove proxy env vars instead
     [string]$ProjectPath = "",                    # CCS project for the build self-check (optional)
+    [switch]$NoHooks,                             # do not touch ~/.codebuddy/settings.json
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Continue'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+
+# ---- which agent are we installing for?  (the SKILL.md payload itself is agent agnostic) ----
+# -SkillsRoot wins when given explicitly; otherwise it follows -Target.
+if (-not $PSBoundParameters.ContainsKey('SkillsRoot')) {
+    switch ($Target.ToLower()) {
+        'codebuddy' { $SkillsRoot = Join-Path $HOME '.codebuddy\skills' }
+        'claude'    { $SkillsRoot = Join-Path $HOME '.claude\skills' }
+        'codex'     { $SkillsRoot = Join-Path $HOME '.codex\skills' }
+        'custom'    { Write-Output "   [FAILED] -Target custom requires -SkillsRoot <dir>"; exit 2 }
+        default     { Write-Output ("   [FAILED] unknown -Target '" + $Target + "' (use codebuddy | claude | codex | custom)"); exit 2 }
+    }
+}
+$doHooks = (-not $NoHooks) -and ($Target.ToLower() -eq 'codebuddy')
 function Step($m) { Write-Output ("== " + $m) }
 function Note($m) { Write-Output ("   " + $m) }
 function Apply-Step($m, [scriptblock]$action) {
@@ -50,16 +71,18 @@ if ($DryRun) { Write-Output "   (dry run: nothing will be changed)" }
 
 # ---------- 1. install this skill ----------
 Step "install skill: ti-c2000-ccs-auto"
-$target = Join-Path $SkillsRoot 'ti-c2000-ccs-auto'
+# NOTE: this variable is $installPath, NOT $target - PowerShell variable names are
+# case-insensitive, so calling it $target would silently overwrite the -Target parameter.
+$installPath = Join-Path $SkillsRoot 'ti-c2000-ccs-auto'
 if (-not (Test-Path $SkillsRoot)) {
     Apply-Step ("create " + $SkillsRoot) { New-Item -ItemType Directory -Force -Path $SkillsRoot | Out-Null }
 }
-if (Test-Path $target) {
-    $bak = "$target.bak-" + (Get-Date -Format 'yyyyMMdd_HHmmss')
-    Apply-Step ("existing install -> " + (Split-Path $bak -Leaf)) { Move-Item -LiteralPath $target -Destination $bak -Force }
+if (Test-Path $installPath) {
+    $bak = "$installPath.bak-" + (Get-Date -Format 'yyyyMMdd_HHmmss')
+    Apply-Step ("existing install -> " + (Split-Path $bak -Leaf)) { Move-Item -LiteralPath $installPath -Destination $bak -Force }
 }
-if ((Get-Item -LiteralPath $repoRoot).FullName -ne (Get-Item -LiteralPath $target -ErrorAction SilentlyContinue).FullName) {
-    Apply-Step ("copy repo to " + $target) { Copy-Item -LiteralPath $repoRoot -Destination $target -Recurse -Force }
+if ((Get-Item -LiteralPath $repoRoot).FullName -ne (Get-Item -LiteralPath $installPath -ErrorAction SilentlyContinue).FullName) {
+    Apply-Step ("copy repo to " + $installPath) { Copy-Item -LiteralPath $repoRoot -Destination $installPath -Recurse -Force }
 } else {
     Note "already installed in place (repo == skill folder)"
 }
@@ -77,8 +100,14 @@ if ($GitSource) {
     }
 }
 
-# ---------- 3. merge hooks into settings.json ----------
-Step "merge hooks into ~/.codebuddy/settings.json"
+# ---------- 3. merge hooks into settings.json (CodeBuddy only) ----------
+# The git-management hooks use CodeBuddy's hook schema AND its tool names
+# (write_to_file / replace_in_file), and they live in ~/.codebuddy/settings.json which no other
+# agent reads - so this step only runs for -Target codebuddy (and not with -NoHooks).
+Step "hooks (CodeBuddy only)"
+if (-not $doHooks) {
+    Note ("skipped: target = " + $Target + $(if ($NoHooks) { ", -NoHooks" } else { "" }))
+}
 $settingsPath = Join-Path $HOME '.codebuddy\settings.json'
 $gitScript    = Join-Path $SkillsRoot 'git-management\scripts'
 $hookDefs = @(
@@ -86,7 +115,9 @@ $hookDefs = @(
     @{ name = 'PostToolUse';  json = @{ matcher = 'Write|Edit|write_to_file|replace_in_file'; hooks = @(@{ type = 'command'; command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$gitScript\autosnapshot.ps1`""; timeout = 30 }) } },
     @{ name = 'SessionEnd';   json = @{ matcher = '*'; hooks = @(@{ type = 'command'; command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$gitScript\autosnapshot.ps1`" -Stop"; timeout = 20 }) } }
 )
-if ($DryRun) {
+if (-not $doHooks) {
+    # nothing to do (see above)
+} elseif ($DryRun) {
     foreach ($h in $hookDefs) { Note ("would ensure hook: " + $h.name) }
 } else {
     $cfg = $null
@@ -164,7 +195,7 @@ Write-Output "================ MANUAL STEPS (cannot be automated) ==============
     "5. Verify: scripts\ti_c2000_build.ps1 -ProjectPath <project>      (compile+link, no hardware needed)",
     "   then:  scripts\ti_c2000_debug.ps1   -ProjectPath <project> -Build -Run [-ReadVars ...]",
     "6. Hardware side: probe plugged in, board powered, targetConfigs\*.ccxml present in the project.",
-    "7. Restart the CodeBuddy session so the new skills + hooks are picked up."
+    ("7. Restart the " + $Target + " session so the new skill is picked up" + $(if ($doHooks) { " (+ hooks)" } else { "" }) + ".")
 ) | ForEach-Object { Write-Output $_ }
 Write-Output "===================================================================="
 Write-Output "RESULT: OK"

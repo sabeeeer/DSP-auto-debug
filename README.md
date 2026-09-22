@@ -30,6 +30,10 @@ references/
   project-map.md                  # 工程结构、模块接口、引脚占用表
   dss-debug.md                    # loadti / DSS 用法与排错、长时调试
   other-devices-and-probes.md     # 其他 C2000 型号 + 其他仿真器/双核
+docs/
+  portability.md                  # 迁移到 Codex / Claude Code / 其他 agent 的步骤与差异
+setup/
+  Setup-CCS-Skills.ps1            # 一键部署（-Target codebuddy|claude|codex|custom）
 scripts/
   ti_c2000_build.ps1              # 编译 + 链接自检
   ti_c2000_debug.ps1              # 构建 + 下载 + 运行 + 读回（支持后台/超时/核选择）
@@ -47,6 +51,16 @@ Linux/mac: ~/.codebuddy/skills/ti-c2000-ccs-auto/
 ```
 
 重启会话后，提到 DSP/C2000/CCS/调试/写程序或读写 DSP 头文件时会自动加载。
+
+装给别的 agent（Codex / Claude Code / 任意目录）用仓库自带的部署脚本，`-Target` 选目录：
+
+```powershell
+... \setup\Setup-CCS-Skills.ps1 -Target codex      # -> ~/.codex/skills/
+... \setup\Setup-CCS-Skills.ps1 -Target claude     # -> ~/.claude/skills/
+... \setup\Setup-CCS-Skills.ps1 -Target custom -SkillsRoot <目录>
+```
+
+迁移细节与差异见 [docs/portability.md](docs/portability.md)。
 
 ## 4. 依赖
 
@@ -107,3 +121,18 @@ powershell ... -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 
 - 默认链接脚本多为 RAM 版（如 `28335_RAM_lnk.cmd`），**掉电即失**；要脱机运行需换 Flash 链接脚本。
 - 调试器操作会打断目标板当前程序；`-ReadVars` 会复位并运行被加载的程序。
 - 本仓库不含任何密钥；`references/environment.md` 里的路径是本机实测记录，可按需替换。
+
+## 9. 迁移到其他 agent（Codex / Claude Code / …）
+
+`SKILL.md` 用的是通用 skill 格式（`name` + `description`），`scripts/*.ps1` 是纯 PowerShell 调 CCS 命令行，
+**不含 CodeBuddy 专有 API**，所以整套可以直接搬到别的 agent 用：
+
+```powershell
+... \setup\Setup-CCS-Skills.ps1 -Target codex      # ~/.codex/skills/
+... \setup\Setup-CCS-Skills.ps1 -Target claude     # ~/.claude/skills/
+... \setup\Setup-CCS-Skills.ps1 -Target custom -SkillsRoot <目录>
+```
+
+只有 git 快照 hooks 是 CodeBuddy 专有（写在 `~/.codebuddy/settings.json`，且匹配 CodeBuddy 的工具名），
+给别的 agent 安装时会自动跳过（也可 `-NoHooks`）。各 agent 的目录、触发方式差异、以及用 `AGENTS.md`
+兜底的做法：**[docs/portability.md](docs/portability.md)**。
