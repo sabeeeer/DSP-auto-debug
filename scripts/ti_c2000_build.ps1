@@ -117,7 +117,7 @@ if (Test-Path (Join-Path $ProjectPath '.project')) {
 # ---- pick the build configuration whose options are used ----
 # A .cproject may declare several configurations (Debug / Release / F2837xD_CPU1 ...) plus a
 # <refreshScope> block that also contains <configuration> nodes but has no @id - those must not
-# be mistaken for a build configuration.  CCS writes its build output into <project>\<配置名>,
+# be mistaken for a build configuration.  CCS writes its build output into <project>\<config name>,
 # so an existing folder with the configuration's name is the strongest hint; then a name/parent
 # containing "Debug"; then the first one.
 $cfgCands = @($cproj.SelectNodes('//configuration[@id]'))
@@ -275,8 +275,9 @@ foreach ($p in $rawInc) {
     $q = $q -replace '/', '\'
     $q = $q.Trim('"').TrimEnd('}')
     if ($q -and -not (Test-Path -LiteralPath $q)) {
-        # 工程里声明的 include 目录在磁盘上不存在（换机器/挪目录常见）：CCS 会直接报错，
-        # 这里跳过它继续编译，但必须显眼提示，否则后面的 "cannot open source file" 很难定位。
+        # include path declared in the project but missing on disk (other PC / moved project):
+        # CCS would fail here; we skip it and keep compiling, but say it loudly - otherwise the
+        # later "cannot open source file" error is hard to trace back to its cause.
         Info "WARNING : include path missing on disk, skipped -> $q"
         continue
     }
@@ -336,8 +337,9 @@ $allCmd = @(Get-ChildItem -Path $ProjectPath -Recurse -Filter '*.cmd' -ErrorActi
             Where-Object { $_.FullName -notmatch '\\Debug\\' })
 $cmdExcluded = @($allCmd | Where-Object { Test-Excluded $_.FullName })
 $cmdActive   = @($allCmd | Where-Object { -not (Test-Excluded $_.FullName) } | Sort-Object Name)
-# CCS 的托管构建会把工程里每个 *.cmd 都交给链接器（别的芯片的 cmd 必须"exclude from build"
-# 才不参与，正是这个原因），所以这里也全部收进来，而不是只挑名字带 Headers 的。
+# CCS's managed build hands EVERY *.cmd of the project to the linker - which is exactly why
+# other devices' cmd files have to be marked "exclude from build" in .cproject.  So collect
+# them all here instead of guessing by the "Headers" name.
 foreach ($f in $cmdActive) {
     if ($cmdFiles -notcontains $f.FullName) { $cmdFiles += $f.FullName }
 }
@@ -440,8 +442,8 @@ foreach ($f in $cfiles) {
         }
     }
     if ($code -ne 0) { $compileErrors += "FAILED FILE: $f" }
-    # 不同目录下的同名源文件会写进同一个 <名字>.obj，后编译的会把先前的覆盖掉（链接就会漏模块）
-    # -> 立刻改名，保证每个源文件都有独立目标文件
+    # same-named sources in different folders produce the same <name>.obj and the later one
+    # silently overwrites the earlier (the link would drop a whole module) -> rename at once
     if ($code -eq 0 -and $dupBase[$base]) {
         $objPath = Join-Path $objDir "$base.obj"
         if (Test-Path -LiteralPath $objPath) {
@@ -469,7 +471,7 @@ if ($compileErrors.Count -eq 0) {
                "-i$cgRoot\lib", "-i$cgRoot\include", '--reread_libs', $romModel)
     if ($lnkPriority) { $lflags += '--priority' }
     foreach ($d in $lnkDiagSupp) { $lflags += "--diag_suppress=$d" }
-    # 工程自己声明的库搜索路径（--search_path），宏展开后只保留磁盘上存在的
+    # the project's own library search paths (--search_path), macros expanded, existing ones only
     foreach ($p in $lnkSearch) {
         $q = ([string]$p).Trim('"')
         $q = $q.Replace('${workspace_loc:/${ProjName}}', $ProjectPath)
@@ -484,7 +486,8 @@ if ($compileErrors.Count -eq 0) {
     foreach ($o in $objs) { $lnkArgs += $o }
     foreach ($c in $cmdFiles) { $lnkArgs += $c }
     foreach ($l in $libs) { $lnkArgs += $l }
-    # 运行库：工程自带同名库时以工程的为准（CCS 就是这么链的），不要重复塞编译器自带的
+    # runtime library: if the project ships its own copy, that is what CCS links - use it and
+    # do not append the compiler's copy on top
     if (@($libs | Where-Object { (Split-Path $_ -Leaf) -ieq $rts }).Count -gt 0) {
         Info ("NOTE    : runtime library taken from the project: $rts")
     } else {
