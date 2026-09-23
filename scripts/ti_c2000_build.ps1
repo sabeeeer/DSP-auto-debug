@@ -19,6 +19,8 @@
 #     ... -IgnoreExclusions                also build/link resources excluded in .cproject
 #     ... -OutputDir <dir>                 object/map/log location (default: %TEMP%\ti_c2000_build\<proj>;
 #                                          keep it OUTSIDE the project - see the note at step 5)
+#     ... -KeepLaunches                    keep <project>\.launches\*.launch (CCS GUI debug configs,
+#                                          machine-local + absolute paths; default = move them out)
 #     ... -Clean | -Quiet | -NoStage
 #   Exit code: 0 = compile AND link OK, 1 = failed, 2 = environment problem
 #
@@ -44,7 +46,8 @@ param(
     [switch]$Clean,
     [switch]$Quiet,
     [switch]$NoStage,
-    [switch]$IgnoreExclusions
+    [switch]$IgnoreExclusions,
+    [switch]$KeepLaunches
 )
 
 $ErrorActionPreference = 'Continue'   # native compiler stderr must not abort the loop
@@ -324,6 +327,23 @@ Info ("OPTIONS : -v{0}{1}{2} {3}{4}{5}{6}{7} | {8} | runtime {9}" -f $siliconVer
       $(if ($fpMode) { " $fpMode" } else { '' }), $(if ($relaxedAnsi) { ' --relaxed_ansi' } else { '' }),
       $outFormat, $rts)
 Info ("DEFINES : {0}" -f $(if ($defines.Count -gt 0) { ($defines -join ', ') } else { '<none>' }))
+
+# ---- housekeeping: CCS GUI launch configs are machine-local junk ----
+# <project>\.launches\*.launch are written by CCS whenever you start a debug session in the GUI.
+# They embed absolute paths of THIS PC (and of projects that may no longer exist), so they are
+# useless in a repo / on a colleague's checkout and just clutter the project.  The command-line
+# flow (loadti / DSS) never reads them, so - unless -KeepLaunches is given - move them out of the
+# project into a timestamped %TEMP% backup (recoverable, nothing is destroyed).
+$launchFiles = @(Get-ChildItem -Path (Join-Path $ProjectPath '.launches') -Filter '*.launch' -File -ErrorAction SilentlyContinue)
+if ($KeepLaunches) {
+    if ($launchFiles.Count -gt 0) { Info ("NOTE    : kept " + $launchFiles.Count + " .launch file(s) (-KeepLaunches)") }
+} elseif ($launchFiles.Count -gt 0) {
+    $launchBak = Join-Path ([IO.Path]::GetTempPath()) ("ti_c2000_launch_backup\" + $projName + "\" + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    New-Item -ItemType Directory -Force -Path $launchBak | Out-Null
+    foreach ($lf in $launchFiles) { Move-Item -LiteralPath $lf.FullName -Destination (Join-Path $launchBak $lf.Name) -Force }
+    Info ("NOTE    : moved " + $launchFiles.Count + " .launch file(s) out of the project (CCS GUI debug configs: machine-local, absolute paths; loadti/DSS do not use them)")
+    Info ("          backup : $launchBak")
+}
 
 # ---- linker command files ----
 $lnkCmd = ""

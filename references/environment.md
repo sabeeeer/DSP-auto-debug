@@ -54,7 +54,9 @@
    Rhino 没有 `env.sleep()`，要用 `java.lang.Thread.sleep(ms)`。
 6. **本工作区有自动 git 快照（约 60 s 一次）**：曾出现临时测试文件删除后又被带回工程（因为它已进快照）。
    不要在工程目录里留测试文件，用完立刻删并确认 `git status` 干净。
-7. `.launches/` 下原有 CCS 调试启动配置已被删除；走命令行的 loadti/DSS 不受影响，GUI 里需重新建调试配置。
+7. `.launches/*.launch`（CCS GUI 调试启动配置，内含本机绝对路径）**已改为自动清理**：自检脚本
+   `ti_c2000_build.ps1` 每次运行都会把它们移到 `%TEMP%\ti_c2000_launch_backup\<工程>\<时间戳>\`
+   （可恢复，`-KeepLaunches` 保留原位）；走命令行的 loadti/DSS 不读这些文件，GUI 里需重新建调试配置。
 8. 本机 PowerShell 限制 `Set-Content` 无显式编码、管道删除等写法；脚本统一用 `-LiteralPath` / 显式编码 / .NET API。
 9. **`.ps1` 脚本里禁止写中文**（重要）：PowerShell 5.1 对无 BOM 的 UTF-8 文件按 ANSI(GBK) 读取，
    中文后紧跟的 `"` 会被当成双字节字符的一部分被"吃掉"，导致字符串未闭合、脚本整套语法崩掉
