@@ -133,7 +133,7 @@ if ($Build) {
         if (-not $bfail) { $bfail = 'FAILURE: BUILD_FAILED' }
         Out2 $bfail
         Out2 "RESULT: FAIL"
-        Out2 "REASON: build failed - debugger step aborted (details in Debug\auto_build\build.log)"
+        Out2 "REASON: build failed - debugger step aborted (see the build script output / its build.log)"
         exit 1
     }
 }

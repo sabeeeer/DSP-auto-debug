@@ -11,7 +11,7 @@
 │   ├─ 28335_RAM_lnk.cmd          # RAM 链接（.cproject 指定）
 │   └─ DSP2833x_Headers_nonBIOS.cmd
 ├─ targetConfigs/TMS320F28335.ccxml   # XDS100v1 + TMS320F28335
-├─ Debug/                         # CCS 自动生成（含 auto_build/ 为脚本产物）
+├─ Debug/                         # CCS 自动生成；只放脚本同步来的 <工程>.out（obj/map/log 都在 %TEMP%）
 ├─ .cproject / .project
 ```
 

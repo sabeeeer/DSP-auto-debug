@@ -79,7 +79,7 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 | `Cannot call method "writeRegister" of undefined` | `session.registers` 不存在；改 `session.memory.writeRegister` |
 | `identifier not found: EPwm1Regs` | 会话没装载符号：full 模式用 `loadProgram`，readonly 模式要先 `symbol.load` |
 | 读回全是 0 | ① 程序没跑到（换/加大 `-WaitFor` 与 `-RunMs`，别用固定等待）② 外设时钟未开（对应模块的 `PCLKCRx` 位没使能）③ 实际跑的是 Flash 旧程序（没做 `restart()`/写 PC） |
-| 想确认"到底跑到哪了" | 读 `PC`，再拿 map 文件（`Debug\auto_build\<工程>.map`）查该地址落在哪个函数；配合 `GpioCtrlRegs.GPADIR`、`SysCtrlRegs.PCLKCR1` 判断初始化进度 |
+| 想确认"到底跑到哪了" | 读 `PC`，再拿 map 文件（`%TEMP%\ti_c2000_build\<工程>\<工程>.map`）查该地址落在哪个函数；配合 `GpioCtrlRegs.GPADIR`、`SysCtrlRegs.PCLKCR1` 判断初始化进度 |
 | `Error reading memory: Address: 0x7012 ... 0x20000` | 用 `memory.readWord` 直接读外设帧会失败，改走 `expression.evaluate`（如 `SysCtrlRegs.PCLKCR1.all`） |
 | `no probe / cannot connect` | 仿真器未插/板未上电，或 CCS GUI 占用了 JTAG |
 | loadti 输出无 `Done` | 连接失败或目标被占用；加 `-x=<log>` 看详细日志 |

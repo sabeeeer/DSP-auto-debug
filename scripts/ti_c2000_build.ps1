@@ -17,6 +17,8 @@
 #     ... -CompilerRoot <ti-cgt-c2000_x.y.z.LTS>
 #     ... -LinkCmd "extra1.cmd,extra2.cmd"  add linker command files
 #     ... -IgnoreExclusions                also build/link resources excluded in .cproject
+#     ... -OutputDir <dir>                 object/map/log location (default: %TEMP%\ti_c2000_build\<proj>;
+#                                          keep it OUTSIDE the project - see the note at step 5)
 #     ... -Clean | -Quiet | -NoStage
 #   Exit code: 0 = compile AND link OK, 1 = failed, 2 = environment problem
 #
@@ -391,8 +393,28 @@ if ($srcExcluded.Count -gt 0) {
 Info "SOURCES : $($cfiles.Count) file(s)"
 
 # ---------- 5. output dir ----------
-if (-not $OutputDir) { $OutputDir = Join-Path $ProjectPath 'Debug\auto_build' }
+# NEVER put the object files inside the project tree.
+# CCS's managed build hands EVERY *.obj found in the project to the linker (exactly the same
+# rule as for .cmd/.lib), so a scratch dir such as <project>\Debug\auto_build\obj makes the
+# CCS GUI build fail with hundreds of lines like
+#     error #10056: symbol "_InitAdc" redefined:
+#         first defined in "../Debug/auto_build/obj/DSP2833x_Adc.obj";
+#         redefined in "./HW_Configuration/.../DSP2833x_Adc.obj"
+# (its own fresh objects collide with our copies).  So the default lives in %TEMP%.
+if (-not $OutputDir) { $OutputDir = Join-Path ([IO.Path]::GetTempPath()) ("ti_c2000_build\" + $projName) }
 $objDir = Join-Path $OutputDir 'obj'
+# leftover scratch from an earlier version of this script, still inside the project -> remove it,
+# otherwise the CCS GUI keeps linking those stale objects together with its own
+$legacyObj = Join-Path $ProjectPath 'Debug\auto_build\obj'
+if ((Test-Path -LiteralPath $legacyObj) -and -not $legacyObj.StartsWith($objDir, [StringComparison]::OrdinalIgnoreCase)) {
+    Remove-Item -LiteralPath $legacyObj -Recurse -Force
+    Info ("NOTE    : removed stale in-project objects (the CCS GUI would link them a second time): $legacyObj")
+}
+if ($OutputDir.StartsWith($ProjectPath, [StringComparison]::OrdinalIgnoreCase)) {
+    Info ("WARNING : -OutputDir is inside the project: $OutputDir")
+    Info "          CCS links every *.obj in the project tree, so a CCS GUI build will now fail with"
+    Info "          '#10056 symbol ... redefined'. Use a directory outside the project instead."
+}
 if ($Clean -and (Test-Path -LiteralPath $OutputDir)) { Remove-Item -LiteralPath $OutputDir -Recurse -Force }
 # always start from an empty object dir: stale .obj of deleted sources must never be linked in
 if (Test-Path -LiteralPath $objDir) { Remove-Item -LiteralPath $objDir -Recurse -Force }
@@ -463,6 +485,8 @@ if ($renameNote.Count -gt 0) {
 # ---------- 7. link ----------
 $linkErrors = @()
 $outFile = Join-Path $OutputDir "$projName.out"
+# the staged copy stays inside the project on purpose: ti_c2000_debug.ps1 / loadti load it from
+# there, and a lone .out is NOT a link input for the CCS build (unlike .obj/.cmd/.lib)
 $stagedOut = Join-Path $ProjectPath "Debug\$projName.out"
 if ($compileErrors.Count -eq 0) {
     $objs = @(Get-ChildItem -Path $objDir -Filter '*.obj' | ForEach-Object { $_.FullName })
