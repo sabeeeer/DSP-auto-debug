@@ -1,6 +1,6 @@
 ---
 name: ti-c2000-ccs-auto
-description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837xD/F2837xS、F2807x、F2838x、F28004x/F28003x、F28M35x、F29H85x 等）在 CCS12/CCS6 上的全自动开发+调试闭环（已在 DSP28335 实测）：自动按工程约定写外设驱动代码 → 用 cl2000 自动编译+链接自检（不必打开 CCS 界面，编译选项/器件/运行库/链接脚本全部从 .cproject 反推）→ 自动下载进调试器运行并读回变量与寄存器，把编译报错、未定义符号、下载失败挡在交付之前。仿真器覆盖 XDS100/110/200/510/560、Spectrum Digital、Blackhawk、SEGGER J-Link 及 TI 模拟器。使用时机(满足任一即用)：① 用户要求"DSP写程序/写代码/改代码/加功能/写驱动"；② 对话出现"调试/debug/下载/烧录/进调试器/跑一下/验证"等调试意图；③ 读写或打开 DSP 头文件与工程文件（DSP2833x_Device.h、DSP2833x_Examples.h、F28xx_Device.h、driverlib.h、.cproject、F28335/28335/2833x/F2837/F2806 的 APP/ 模块）。触发词：TI C2000、TIC2000、C2000、DSP28335、F28335、28335、2833x、F28027、F28069、F28379D、F28377D、F280049、F28388D、DSP开发、DSP程序、DSP工程、CCS、CCS12、CCS6、Code Composer Studio、ccstudio、进调试器、自动调试、自动编译、一键编译、编译验证、下载程序、烧录、运行程序、loadti、DSS、Debug Server Scripting、ccxml、targetConfigs、XDS100、XDS110、XDS200、XDS560、XDS510、Spectrum Digital、Blackhawk、SEGGER、J-Link、TI模拟器、tisim、仿真器、JTAG、双核、CPU1、CLA、driverlib、SysConfig、cl2000、gmake、.out文件、EPWM、PWM波、SCI、串口、ADC、DMA、GPIO、外部中断、定时器、看门狗、寄存器、编译不过、链接错误、未定义符号、报错排查。
+description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837xD/F2837xS、F2807x、F2838x、F28004x/F28003x、F28M35x、F29H85x 等）在 CCS12/CCS6 上的全自动开发+调试闭环（已在 DSP28335 实测）：自动按工程约定写外设驱动代码 → 用 cl2000 自动编译+链接自检（不必打开 CCS 界面，编译选项/器件/运行库/链接脚本全部从 .cproject 反推）→ 自动下载进调试器运行并读回变量与寄存器，把编译报错、未定义符号、下载失败挡在交付之前。仿真器覆盖 XDS100/110/200/510/560、Spectrum Digital、Blackhawk、SEGGER J-Link 及 TI 模拟器。使用时机(满足任一即用)：① 用户要求"DSP写程序/写代码/改代码/加功能/写驱动"；② 对话出现"调试/debug/下载/烧录/进调试器/跑一下/验证"等调试意图；③ 读写或打开 DSP 头文件与工程文件（DSP2833x_Device.h、DSP2833x_Examples.h、F28xx_Device.h、driverlib.h、.cproject、F28335/28335/2833x/F2837/F2806 的 APP/ 模块）。触发词：TI C2000、TIC2000、C2000、DSP28335、F28335、28335、2833x、F28027、F28069、F28379D、F28377D、F280049、F28388D、DSP开发、DSP程序、DSP工程、CCS、CCS12、CCS6、Code Composer Studio、ccstudio、进调试器、自动调试、自动编译、一键编译、编译验证、下载程序、烧录、运行程序、loadti、DSS、Debug Server Scripting、ccxml、targetConfigs、C2000Ware、controlSUITE、cmd链接脚本、XDS100、XDS110、XDS200、XDS560、XDS510、Spectrum Digital、Blackhawk、SEGGER、J-Link、TI模拟器、tisim、仿真器、JTAG、双核、CPU1、CLA、driverlib、SysConfig、cl2000、gmake、.out文件、EPWM、PWM波、SCI、串口、ADC、DMA、GPIO、外部中断、定时器、看门狗、寄存器、编译不过、链接错误、未定义符号、报错排查。
 ---
 
 # TI C2000 / DSP2833x 全自动开发 + 调试（CCS12 / CCS6）
@@ -19,19 +19,38 @@ description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837
 6. **失败必须明说 + 必须给原因分类**：脚本失败时会打印 `FAILURE: <分类>` + `REASON: <原因>` 且退出码非 0。
    向用户转述时必须**原样保留分类与原因**（例如"失败：TIMEOUT，就绪条件 8 秒内没成立"），
    禁止把失败说成成功、禁止只说"有问题"不给原因、禁止在没看到 `RESULT: OK` 时说"已通过"。
+7. **写任何 DSP 代码一律照 TI 官方例程写，不许乱写/凭印象臆造**。
+   **参照源自动探测（不要写死单一路径）**：`scripts\c2000ware_find.ps1` 按优先级找 ——
+   ① 本机 C2000Ware / controlSUITE（常见路径 + 环境变量 `C2000WARE_ROOT`）→ ② 本机快照仓库
+   （`%USERPROFILE%\CodeBuddy\c2000ware-ref` 等）→ ③ **GitHub 快照** `sabeeeer/c2000ware-ref`
+   （自动下载 Release 附件到 `%LOCALAPPDATA%\c2000ware-snapshot` 当缓存，之后本地高速检索）。
+   例程位置（任何来源下都一样）：bitfield `device_support\<器件>\examples\`、
+   driverlib `driverlib\<器件>\examples\`、链接脚本 `device_support\<器件>\common\cmd\`；
+   2833x 另有 controlSUITE `...\f2833x\v142\DSP2833x_examples_ccsv5\` 与 `E:\2.28335资料\官方程序示例\`（49 个单文件）。
+   写外设代码前先跑 `c2000ware_find.ps1 -Keyword <外设>`（或 `-GetFile <路径>` 看具体文件），
+   照例程的寄存器顺序、TI 宏常量（`TB_COUNT_UP`/`AQ_SET`/`CC_SHADOW`…）、`EALLOW/EDIS`、
+   中断四层 + `EINT; ERTM;`、ISR 里 `ETCLR` + `PieCtrlRegs.PIEACK.all = PIEACK_GROUPx` 来写；
+   **找不到对应例程就先问用户，别猜寄存器**。
+   规范/骨架/严禁清单见 `references/ti-official-style.md`；器件·库·需求映射见 `references/c2000ware-index.md`。
+   ⚠ `E:\DSP8233x_ProjectExample\DSP2833x_Example\`、`E:\3.PZ-DSP28335-L开发板资料` 是开发板配套例程，只能当参考。
 
 ## 一键命令
 
+> **引擎要求：PowerShell 7.0+（本机 7.6.6）**，所有脚本首行都是 `#requires -Version 7.0`，示例统一用 `pwsh`。
+> pwsh 装在 `%LOCALAPPDATA%\Microsoft\PowerShell\7\pwsh.exe`（已入用户 PATH）；老进程没重启时 PATH 可能没生效，用完整路径
+> `& "$env:LOCALAPPDATA\Microsoft\PowerShell\7\pwsh.exe" -NoProfile -File <脚本>`。**不要再退回 Windows PowerShell 5.1**
+> （7.x 默认 UTF-8、中文不乱码；5.1 会因 ANSI 读取中文脚本而报语法错误）。
+
 ```powershell
 # ① 编译+链接自检（几秒出结果，不打开 CCS、不碰硬件）
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
 #   ... -IgnoreExclusions   把 .cproject 里 "exclude from build" 的源码/.cmd/.lib 也算进来（默认照 CCS 跳过）
 
 # ② 构建 + 下载运行（自动检测仿真器与 CCS 安装位置）
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
+pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
 
 # ③ 构建 + 下载运行 + 读回变量/寄存器（最完整的验证；自动轮询到就绪再采样）
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
 # 就绪判据默认取 -ReadVars 的第一项（变为非 0 即认为程序跑到位）；也可显式指定：
 #   ... -WaitFor "GpioCtrlRegs.GPADIR.bit.GPIO8 != 0" -RunMs 15000
 
@@ -49,7 +68,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_de
 
 ## 全自动闭环 SOP
 
-1. **写代码**：新模块放 `APP/<模块名>/<模块名>.c|.h`；`main` 只放 `User/main.c`。
+1. **写代码**：**先照 TI 官方例程写**（铁律第 7 条 + `references/ti-official-style.md`：先翻对应的
+   `Example_2833x*.c`，照它的寄存器顺序 / TI 宏 / `EALLOW-EDIS` / 中断四层 / `EINT; ERTM;` / ISR 应答写）。
+   **找例程/库的固定动作**：`scripts\c2000ware_find.ps1 -Keyword "<功能关键词>"`（在 C2000Ware 全量
+   例程/库/API 里定位）→ 查 `references/c2000ware-index.md` 的「我要做 X」速查表 → 打开命中的
+   examples 照它写（含 math/dsp/DCL/ai 各库的实际例程）。
+   新模块放 `APP/<模块名>/<模块名>.c|.h`；`main` 只放 `User/main.c`。
    新增目录**必须**把路径加进 `.cproject` 的 `compilerID.INCLUDE_PATH`，否则 `cannot open source file`。
 2. **自检**：跑 ① 。编译错误按 `文件, 行号: error #xxx` 定位；链接错误看未定义符号名。
    先扫 `CONFIG:` / `DEFINES:` / `EXCLUDED:` 三行：配置或宏不对 = 读错了 `.cproject` 的配置段；
@@ -63,6 +87,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_de
 5. **看结果**：脚本会先轮询就绪（`DSS: ready (...) after N ms`），再逐条打印 `VAR xxx = 值`，对着源码核对
    （本工程实测：`TBPRD=65535`、`CMPA.all=0xCCCC0000`(即 CMPA=0xCCCC=52428=65535×80%)、`CLKDIV=3`、`SCILBAUD=39`(115200bps)、`GPADIR.bit.GPIO8=1`，就绪点约 3.25 s）。
    若一直读回 0：先加大 `-RunMs`（默认预算 8000 ms）或用 `-WaitFor` 换一个更合适的就绪判据，再排查代码。
+   ★ **就绪判据优先用外设寄存器**（如 `EPwm1Regs.TBPRD == 14999`、`SciaRegs.SCILBAUD != 0`），**别用 .bss 全局变量**：
+   `loadProgram()` 不清 .bss，上次运行留下的 RAM 值会让判据瞬间成立（症状：`ready after 250 ms` 但 `TBPRD=0 / SCILBAUD=0`，
+   其实程序还没跑到初始化）。脚本对"≤500 ms 就就绪"会打 NOTE 提醒；实测换寄存器判据后 3500 ms 才是真就绪。
 
 ## 调试时长（大程序 / 长时间等待）
 
@@ -77,7 +104,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_de
 
 ```powershell
 # 5 分钟级长调试，后台跑，随时查日志
-powershell -NoProfile -ExecutionPolicy Bypass -File "...\ti_c2000_debug.ps1" `
+pwsh -NoProfile -ExecutionPolicy Bypass -File "...\ti_c2000_debug.ps1" `
   -ProjectPath "<工程根目录>" -Build -Run -RunMs 300000 -WaitFor "EPwm1Regs.TBPRD != 0" `
   -ReadVars "EPwm1Regs.TBPRD,SciaRegs.SCILBAUD" -Background
 # 之后轮询日志（出现 RESULT: 即结束）
@@ -91,8 +118,8 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 
 | 检查项 | 规则 |
 |---|---|
-| 模块位置 | `APP/<模块>/<模块>.c/.h`，文件名=模块名 |
-| 新增目录 | 必须补 `.cproject` include 路径，否则报头文件找不到 |
+| 模块位置 | `APP/<模块>/<模块>.c/.h`，文件名=模块名；**也可以放工程顶层（与 `APP` 同级）**，如 `<工程>\OpenLoop\` —— CCS 按 `sourceEntries`(整个工程) 扫源码，两种位置都编得到，不一定非得塞进 `APP` |
+| 新增目录 | 必须补 `.cproject` include 路径（`${ProjName}/<目录>`），顶层目录同理，否则报头文件找不到 |
 | 头文件保护 | `#ifndef XXX_H_ / #define XXX_H_ / #endif` |
 | 符号唯一 | 别重复定义已有函数（如 `uart.c` 的 `error()`、各 `InitXxx()`、`xxx_isr()`） |
 | 命名前缀 | 同一外设统一前缀（`OLED_`、`EPWM1_`、`UARTa_`、`TIM0_`、`ADC_`） |
@@ -102,10 +129,13 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | 中断 | `EALLOW; PieVectTable.X = &isr; EDIS;` + 使能 `PIEIERn`/`IER` + ISR 内清 `PIEACK` |
 | 看门狗 | `InitSysCtrl()` 内部已 `DisableDog()`，不要再手写 `WDCR` |
 | 链接脚本 | 默认 `28335_RAM_lnk.cmd`（RAM 调试，掉电丢失）；要脱机运行需换 Flash 链接 |
+| **RAM 空间**（加模块前必查） | `.text` 撞顶 = 链接报 `#10099-D`。先跑 `scripts\check_ram_layout.ps1` 判定是"跨片"还是"真不够"；本工程已合并成连续大块（`RAMCODE`=L0~L3 16K 字、`RAMDATA`=L4~L7 16K 字）。详见 `references/ram-and-linker.md`。⚠️ C2000 编译器**默认不按函数分段**：一个 `.c` 里只要有一个函数被引用，**整份 `.c`** 都会进程序段 —— 所以"临时/自测/可选"功能要**单独成文件** |
+| `.cmd` 编码 | TI 例程的 `.cmd` 常是 **GBK**，PowerShell 默认按 UTF-8 读写会把中文注释打成乱码（不可逆）。改 `.cmd` 必须按 936 读写（见 `ram-and-linker.md` §5） |
+| 目录名 | **必须 ASCII**：TI 编译器打不开含中文的路径（`Fatal error #1965`）|
 | 工具函数 | `DELAY_US()` 依赖 `DSP2833x_Examples.h` 的 `CPU_RATE` |
 | 主循环 | `main()` 里 `while(1)` 常驻；不要新增第二个 `main` |
 
-## 外设写法速查（工程惯例）
+## 外设写法速查（工程惯例；细节一律以 TI 官方例程为准 → `references/ti-official-style.md`）
 
 - **EPWM**：`EPWM1_Init(tbprd)` → `EPWM1A_SetCompare(cnt)`；模块约定 `TBCTR < CMPA` 输出高 → 占空比 = `CMPA/TBPRD`；频率用 `TBCTL.CLKDIV/HSPCLKDIV` 分频。
 - **SCI/串口**：`UARTa_Init(baud)`（`BRR = 37500000/(8*baud)-1`）→ `UARTa_SendByte/SendString`；发二进制曲线用小端两字节。
@@ -122,8 +152,23 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | `redefinition of symbol` | 两个模块同名函数/变量（常见 `error()`、`Init()`），改前缀 |
 | 找不到编译器 / `.cproject` 声明的版本没装 | 脚本会自动退回该 CCS 自带的 C2000 编译器并打印 NOTE |
 | 下载失败 `no probe / cannot connect` | 仿真器没插/板上电，或 CCS GUI 已占用 JTAG（先关 GUI 里的调试会话） |
+| `Error -151` / `Error -1135`（探针报错，**时好时坏**） | 连接类型与探针版本不一致（v1 配 v2/v3 会时通时断）：`scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2` 一键对齐（同时改 ccxml + .ccsproject，用法见 `references/other-devices-and-probes.md` §3.1）。改完仍报错，再拔插探针 USB（正常枚举 3 个设备）/查 JTAG 排线/板子供电/CCS 会话占用 |
 | 读回全是 0 | 程序还没跑到（加大 `-RunMs`）、外设时钟未开（`InitSysCtrl()` 没执行）、或没连上目标 |
+| `ready after 250 ms` 但 `TBPRD`/`SCILBAUD` 读回 0 | 就绪判据用了 `.bss` 全局变量，被上次运行的 RAM 残留值误触发（`loadProgram()` 不清 .bss）；改用外设寄存器判据，见 SOP 第 5 点 |
+| 自检 `LINK_ERRORS: unresolved symbols`，且 `SOURCES` 数量比预期少 | 源码在"脚本没扫到的目录"里：脚本按 CCS 规则扫 `APP`/`User`/`DSP2833x_Libraries` + 工程顶层其它目录；若新目录在更深层，或名字在 `$nonSrcDirs` 排除表里，就得调整脚本或用顶层目录 |
+| `error #10099-D: program will not fit into available memory`（报错位置指向 `.cmd` 的 `.text` 行）| **两种完全不同的原因**：① `.text` 段真的太小；② 该段被放在**多个不连续内存块**（`> A \| C`）—— 此时报错文本会带 **`trampoline`** 字样，**再扩空间也没用**。先跑 `scripts\check_ram_layout.ps1` 判定，再照 `references/ram-and-linker.md` 合并成连续大块（`RAMCODE`/`RAMDATA`）或改 Flash 链接 |
+| 只加了一个小模块，`.text` 却突然多出 2~3K 字 | C2000 编译器**默认不按函数分段**（`--gen_func_subsections` 关）：一个函数被引用 → **整份 `.c`** 被链进来。解法：把"临时/自测/可选"功能**单独成文件**（没人引用就整份不占空间）|
+| `Fatal error #1965: cannot open source file "...\乱码\x.c"` | 工程里有**中文目录名**，TI 编译器不认。目录/文件名一律改 ASCII |
 | 下载成功但现象不对 | 先看 RAM/Flash 链接脚本、看门狗、时钟；再用 `-ReadVars` 读关键寄存器对照源码 |
+| `The script 'x.ps1' cannot be run because it contained a "#requires" statement for Windows PowerShell 7.0`（`ScriptRequiresUnmatchedPSVersion`）| 用 Windows PowerShell 5.1（`powershell.exe`）跑了要求 PS7 的脚本。**本机统一用 pwsh 7.6**（`%LOCALAPPDATA%\Microsoft\PowerShell\7\pwsh.exe`）：自己执行命令时用 `pwsh`；脚本内部启动子进程也要用 `$PSHOME\pwsh.exe` 而不是 `powershell`（`ti_c2000_debug.ps1` 的 `-Build` 与后台实例早先踩过，已修）|
+
+| **ADC 数据不变或卡住**（连续多帧读回同值、或结果寄存器恒为 0）| ① C28x 上"软件触发 SEQ1"不可靠（连"等 BSY 置起再等它清零"都拿不到新值）→ 改 **EPWM SOCA 硬件触发**；② `ADCTRL2` 被 `InitAdc()` / 工程老例程的 `ADCTRL2.all = 0x2000` **整体覆写**，把触发位清掉 → 自定义 ADC 初始化放最后 + 收尾兜底重设。DSS 读 `ADCTRL2.all`/`ADCST.all`/`ADCRESULT2` 一眼定位。详见 `references/c28x-pitfalls.md` §1 |
+| **波形偶发尖刺 / 数据里频繁出现 0** | ADC 在**新序列开始时清结果寄存器**，在转换途中读就会拿到 0（越靠后的通道越容易中招；"读两遍一致才采信"也挡不住）。解法：读前等 `SEQ1_BSY == 0`，再**连读 5 次取中值**；根治是在 ADC/EPWM 中断里读。详见 §1.3 |
+| **SPI 外设（DAC 等）输出畸变**（趋势对但有台阶/削顶/尖刺）| ① `SPISTS.bit.INT_FLAG` 是"只写 1 清除"位、**读回恒为 1**，拿它等待等于没等；② **LOAD 脉冲早于 SPI 发完**（0.75MHz 发 11 位要 14.7us，而代码只 `DELAY_US(2)`）→ 锁进去的是残缺数据。解法：提高 `SPIBRR`（如 9 → 3.75MHz）+ 延时给足再拉 LOAD。详见 §2 |
+| **串口帧偶发错位**（上位机数据每 N 帧整体偏移一个通道）| `SCIFFTX.TXFFST` 只有 **4 位**，FIFO 满 16 时读回 0 → "判断有空位"的写法会往满 FIFO 写、数据被静默丢弃。改回逐字节发送；用**帧头间隔分布**诊断（间隔不单一就是丢字节）。详见 §3.1 |
+| **改了 `.ini`/配置但界面没变**（SerialPlot 通道名等）| 程序退出时把窗口状态写回配置文件并**覆盖**你的修改 → 换用**全新配置文件名**（别反复改同一个）。详见 §4.5 |
+| **PID 静差消不掉 / 加了 Kd 反而更差** | ① 采样噪声让增量式积分**净增为 0** → 给反馈加一阶低通（状态变量**必须放文件作用域**，放函数里会被每拍清零）；② 对象无惯性时 Kd 只放大噪声（实测峰峰 +50%）。详见 §5.1/5.2 |
+| 误差分不清是"随机噪声"还是"系统性偏差" | 拿一阶低通试：**低通后变小 = 随机噪声**；**低通无效 = 系统性偏差**（要从采样同步/前馈/结构上解决，调 PID 没用）。详见 §5.3 |
 
 ## 无硬件时的降级验证
 
@@ -139,13 +184,16 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | 需求 | 参数 |
 |---|---|
 | 换仿真器 / 换板 | 在 CCS 里改 target configuration，然后 `-Ccxml <文件>`（默认取 `targetConfigs\` 下第一个） |
+| 换探针型号（XDS100v1/v2/v3、XDS110...） | `scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2`（`-List` 列本机可选项、`-DryRun` 只报告、自动备份 .bak）；一次改齐 ccxml + .ccsproject |
 | 双核 / 多核器件（F2837xD/F28379D/F2838x） | `-CorePattern ".*CPU1.*"` 选核；每个核各自一份 `.ccxml` 与 `.out` |
 | 用模拟器（无硬件） | ccxml 选 tisim，脚本自动跳过硬件检查；也可 `-NoProbeCheck` |
 | 追加链接脚本（Flash 版等） | `-LinkCmd "F2837xD_Flash_lnk_cpu1.cmd"` |
 | 指定编译器 / CCS | `-CompilerRoot <ti-cgt-c2000_x.y.z.LTS>`、`-CcsRoot <CCS安装目录>` |
 
 各型号的头文件名/链接脚本/运行库差异、仿真器枚举名对照、driverlib+SysConfig 工程的注意事项：
-见 [references/other-devices-and-probes.md](references/other-devices-and-probes.md)。
+见 [references/other-devices-and-probes.md](references/other-devices-and-probes.md)；
+C2000Ware 里 cmd 怎么选、2837x/28379x 的 bitfield/driverlib 骨架、SysConfig 与库用法：
+见 [references/c2000ware-guide.md](references/c2000ware-guide.md)。
 
 > 诚实边界：本 skill 只在 **DSP28335 + XDS100 + CCS12.8/CCS6** 上做过硬件实测；其他型号/仿真器按 TI 通用结构自动适配，
 > 第一次用请先跑 `ti_c2000_build.ps1` 自检，再上 `ti_c2000_debug.ps1`。
@@ -171,9 +219,21 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 
 ## 环境与参考
 
-- 本机实测环境/已验证项/已知坑：`references/environment.md`
+- 本机实测环境/已验证项/已知坑：`references/environment.md`（本机已装 **PowerShell 7.6.6**，
+  路径 `%LOCALAPPDATA%\Microsoft\PowerShell\7\pwsh.exe`；**统一用 `pwsh` 执行**，脚本首行 `#requires -Version 7.0`）
+- **TI 官方例程写法规范（写代码前必读）**：`references/ti-official-style.md`
+- **C2000Ware Core SDK 使用指南**（SDK 布局 / bitfield vs driverlib / 28377-379 / cmd 链接脚本怎么选 / SysConfig / 仿真器）：`references/c2000ware-guide.md`
+- **C2000Ware 全量索引**（22 个器件 / 例程类别 / 13 个库（math·dsp·DCL·PMBus·ai…）的实际例程 / 「我要做 X」速查表 / driverlib API 前缀）：`references/c2000ware-index.md`
+- **RAM 布局 / 链接脚本改造**（`#10099-D` 装不下、跨片 trampoline、函数分段陷阱、`.cmd` 是 GBK、大工程上 Flash）：`references/ram-and-linker.md`
+- **★C28x 外设时序实测坑清单**（ADC 触发方式/结果寄存器清零、SPI `INT_FLAG` 与 LOAD 时序、SCI `TXFFST` 丢字节、
+  工程文件 GBK 编码、SerialPlot 配置缓存、增量式 PID 抗噪、dq 角度约定、母线前馈）：
+  `references/c28x-pitfalls.md` —— **写 ADC/SPI/SCI 代码、或排查"数据不对/波形畸变"之前先扫一遍**，
+  末尾还有一份「数据不对」的快速诊断流程（先静态钉死链路，再查动态时序）
 - 工程结构、模块接口、引脚占用表：`references/project-map.md`
 - DSS/loadti 自动调试用法与排错：`references/dss-debug.md`
-- 脚本：`scripts/ti_c2000_build.ps1`（编译链接自检）、`scripts/ti_c2000_debug.ps1`（下载/运行/读回）、`scripts/dss_template.js`（DSS 会话模板）、`scripts/dss_api_probe.js`（换 CCS 版本时先探测 API）
+- 脚本：`scripts/ti_c2000_build.ps1`（编译链接自检）、`scripts/ti_c2000_debug.ps1`（下载/运行/读回）、
+  `scripts/c2000ware_find.ps1`（★在 C2000Ware 里定位官方例程/库/API，写代码前先跑）、
+  `scripts/check_ram_layout.ps1`（★链接脚本/RAM 布局诊断：先判"跨片"还是"真不够"）、
+  `scripts/dss_template.js`（DSS 会话模板）、`scripts/dss_api_probe.js`（换 CCS 版本时先探测 API）
 
 **不要用** CCS 的无界面构建（`eclipsec ... managedbuilder.core.headlessbuild`）：本机会生成编译器路径为空的 `subdir_rules.mk`（Error 87）。自动构建一律走本 skill 的脚本，或在 CCS GUI 里点 Build。
