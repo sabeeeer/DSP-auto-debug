@@ -177,6 +177,21 @@ AdcRegs.ADCRESULT0/1/2
 - **读不到时先查**：符号是否真在 `.out` 里（`static` 可能被优化掉/改名）
 - 详细用法见 `references/dss-debug.md`
 
+### 4.6 `Select-String` 的输出带 ANSI 高亮 → 抓取后像"乱码"
+
+- **现象**：用 `pwsh ... | Select-String -Pattern 'xxx'` 抓编译/脚本输出，显示成
+  `□[7mSOURCES□[0m : 48 file(s)` 这类"乱码"（`□` 其实是 ESC 字符 0x1B）。
+- **根因**：**PowerShell 7 的 `Select-String` 默认把匹配片段用"反显"高亮**（`ESC[7m … ESC[0m`），
+  把 `MatchInfo` 对象当纯文本打印时这些控制符就现形了。**不是被调用脚本的问题**（脚本里没有颜色代码）。
+- **解法（任选其一）**：
+  ```powershell
+  $PSStyle.OutputRendering = 'PlainText'    # ★推荐：写在命令开头，整条命令输出都干净
+  # 或： ... | Select-String xxx | ForEach-Object { $_.Line }   # 只取纯文本行
+  # 或： ... | Select-String xxx -Raw
+  ```
+- **注意**：这只影响"抓取后再显示"。用户在真终端里跑是**彩色且正常**的，
+  **不要去改脚本的着色逻辑**（那是给人看的）。
+
 ### 4.5 SerialPlot 的 `MainWindow.state` 会覆盖通道名
 
 - **现象**：改了 `.ini` 里 `[Channels] channel\N\name=xxx`，界面上还是旧名字
