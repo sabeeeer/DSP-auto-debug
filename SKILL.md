@@ -53,6 +53,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps
 pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
 # 就绪判据默认取 -ReadVars 的第一项（变为非 0 即认为程序跑到位）；也可显式指定：
 #   ... -WaitFor "GpioCtrlRegs.GPADIR.bit.GPIO8 != 0" -RunMs 15000
+# ★判据别写太宽松：程序进 main 之后可能还要好几秒初始化（本类工程常有"上电闪灯标记"阻塞 ~3.5s）。
+#   用 "!= 0" 或 .bss 变量做判据容易"一进 main 就满足"，于是读回一堆"尚未配置"的状态
+#   （TBPRD/ETSEL/ETPS/PIEIERx/IER 全 0、串口抓包"数据恒定"），被误判成"EPWM 没配/中断没跑/
+#   我的改动没生效"。**判据优先用外设寄存器，或用变量的"具体目标值"**：
+#   ... -WaitFor "gBootStage == 5"     ← 5 = 已进主循环（推荐在 main 里埋这种"阶段追踪变量"）
+#   详见 references/dss-debug.md 的「判据怎么选」和「读太早的典型误判清单」
 
 # ④ 只读回，不动目标（程序已由别的方式跑着）
 ... ti_c2000_debug.ps1 -ProjectPath "<工程根目录>" -ReadOnly -ReadVars "EPwm1Regs.TBCTR"

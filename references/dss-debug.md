@@ -7,12 +7,13 @@
 
 ```powershell
 # 仿真器是否在线（没有就别试下载）
-Get-WmiObject Win32_PnPEntity | Where-Object { $_.Name -match 'XDS' } | Select Name
+Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'XDS' } | Select-Object Name
 # CCS GUI 是否占用 JTAG（占用时先关掉里面的调试会话）
 Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 ```
 
-目标配置用工程自带的 `<工程>\targetConfigs\TMS320F28335.ccxml`（XDS100v1 + TMS320F28335）。
+目标配置用工程自带的 `<工程>\targetConfigs\TMS320F28335.ccxml`（**XDS100v2** + TMS320F28335）。
+探针版本与 ccxml 连接类型不一致会出现"能连上但时好时坏"的 `-151`/`-1135`，改法见 other-devices-and-probes.md §3.1。
 
 ## 1. loadti（下载 / 复位运行）
 
@@ -50,6 +51,51 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 表达式为 `{{WAIT_EXPR}}`，由 PS1 生成：默认取 `-ReadVars` 的第一项 `!= 0`，也可用 `-WaitFor "<expr>"` 指定（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`）。
 命中即打印 `DSS: ready ('...') after N ms` 再正式读值；到预算（默认 8000 ms，`-RunMs` 可改）仍未命中会打印 WARNING 并照常读回。
 轮询用 `isHalted()` 做保护、静默捕获异常，不会污染失败判定。
+
+#### 判据怎么选（实测踩坑，2026-09 于 4-1Two_Level）
+
+| 判据 | 结果 |
+|---|---|
+| `.bss` 全局变量（如 `OpenLoopCtrl.usCmpA != 0`、`xxx.usEnable == 1`） | **不可靠**：`loadProgram()` 不清 `.bss`，上次运行留下的 RAM 值会让它在 250 ms 就"就绪"，而此时 `EPwm1Regs.TBPRD` / `SCIA.SCILBAUD` 还是 0 —— 程序根本还没跑到初始化 |
+| 外设寄存器（如 `EPwm1Regs.TBPRD == 14999`、`SciaRegs.SCILBAUD != 0`） | 可靠，实测 3500 ms 命中，且与源码里的赋值一一对应 |
+
+判据最好选"**只有执行到某段代码才会被写成那个值**"的量（初始化里写死的 TBPRD/分频/波特率）。
+模板现在对"≤500 ms 就就绪"会额外打印 NOTE 提醒可能是残留值；看到这个 NOTE 就换寄存器判据重读一次。
+
+**★补充（2026-09-29，同一工程）：`.bss` 变量也能用，关键在判据要写"具体值"**
+
+上面那条更准确的说法是：**`!= 0` 这类宽松判据不可靠，`== 具体目标值` 是可靠的。**
+
+- **踩坑实例**：某次用 `-WaitFor "gBootStage != 0"`（该变量在 `main()` 第一行置 1）。
+  结果**一进 main 就满足**，而程序当时还在 `vOpenLoopInit()` 里做上电闪灯标记 ——
+  `vBoard_RollbackMark()` 是**阻塞式**的（`for` 里 `DELAY_US(700000)` + `DELAY_US(300000)`，
+  本项目闪 3 次加收尾 0.5s ≈ **3.5 秒**）。
+  于是读回一堆"未配置"状态：`EPwm1Regs.TBPRD = 0`、`ETSEL.all = 0`、`PIEIER3.all = 0`、`IER = 0`，
+  看着像"EPWM 完全没配"，其实只是**还没跑到那一步**；串口抓包也只抓了 31ms（程序在闪灯），
+  于是"数据恒定不变"，又像"调制器没工作"。前后白排查好几轮，甚至一度怀疑
+  "EPWM 配置被覆盖"和"看门狗复位"。
+- **正确做法**：判据写**目标值** —— `-WaitFor "gBootStage == 5"`（5 = 已进主循环），
+  或继续用外设寄存器（`EPwm1Regs.TBPRD == 7500`）。
+- **通用口诀**：当"读到的值既是残留、也可能是真实状态"时，**先确认程序跑到哪一步**，再解读寄存器。
+
+**★推荐习惯：在 `main()` 里埋"启动阶段追踪变量"**
+
+```c
+volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5=进主循环 */
+/* 每个关键步骤后赋值；初始化函数内部再细分（如 11~19 = 某 init 的各步）*/
+```
+- 启动卡住时，**读这一个变量就能定位到具体哪一行**（本例正是靠它发现"卡"在闪灯阻塞里）
+- 配合 `-WaitFor "gBootStage == N"` 顺带充当可靠的就绪判据
+- 代价只有一个 `Uint16`，建议每个工程都留一份
+
+**★"读太早"的典型误判清单**（看到这些先别下结论）
+
+| 读到的现象 | 先怀疑 | 而不是 |
+|---|---|---|
+| `TBPRD / ETSEL / ETPS / PIEIERx / IER` 全为 0 | 程序还没跑到 PWM 初始化 | "EPWM 配置被覆盖了" |
+| 串口抓包"数据恒定不变" | 程序仍在启动阶段（本项目 3.5 s 闪灯） | "调制器没工作 / 没发波" |
+| 变量是"上次运行的合理值"（如 `fFreq = 50`，而本次传 5） | RAM 残留（`loadProgram()` 不清 `.bss`） | "我的改动没生效 / 没编进去" |
+| `TBCTR` 不变、`theta` 不动 | 同上，先确认阶段 | "中断没跑 / 时钟没开" |
 
 **跑 RAM 程序的关键**：`memory.loadProgram()` 本身**不会**把 PC 指到程序入口，复位后又默认跑 Flash 里的旧程序。
 所以模板用 `target.restart()`（等价 CCS 的 Restart：复位并跳到加载程序的入口）；若该版本没有 `restart()`，
