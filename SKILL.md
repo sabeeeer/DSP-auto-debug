@@ -33,6 +33,14 @@ description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837
    **找不到对应例程就先问用户，别猜寄存器**。
    规范/骨架/严禁清单见 `references/ti-official-style.md`；器件·库·需求映射见 `references/c2000ware-index.md`。
    ⚠ `E:\DSP8233x_ProjectExample\DSP2833x_Example\`、`E:\3.PZ-DSP28335-L开发板资料` 是开发板配套例程，只能当参考。
+8. **"中断里更新、主循环里读"的变量，读取必须原子（快照）**。
+   典型错误：波形回读时"一边慢慢发串口、一边反复读 `XxxCtrl.usCmpA/B/C`" ——
+   8 字节 @460800 要 174us，而 10kHz 控制中断每 100us 就改一次变量，
+   低/高字节会取自不同时刻，拼出一个不存在的数 → 波形上出现**垂直单边尖刺**（数据撕裂）。
+   正确写法：`DINT; snap=…; EINT;`（≈20ns）先取快照，之后 174us 慢发全部用快照。
+   ⚠ **提高读取频率 / 降低帧率 / 加 `volatile` 都无效**（串口带宽不够 5.75kHz<10kHz；且跨更新点照样撕裂）。
+   规范见 `references/ti-official-style.md` §4.5；实测复盘与回归判据见 `references/c28x-pitfalls.md` §六。
+   注：临界区只包"读"，**绝不把 `DELAY_US`/串口发送包进 `DINT…EINT`**；若在 ISR 里调用要改用保存/恢复 `INTM`。
 
 ## 一键命令
 
@@ -133,6 +141,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | 寄存器保护 | 改 `SysCtrl/GpioCtrl/EPwm` 受保护寄存器必须 `EALLOW; ... EDIS;` |
 | 浮点 | F28335 有 FPU32，用 `float`；避免 `double`，ISR 内别做浮点/除法 |
 | 中断 | `EALLOW; PieVectTable.X = &isr; EDIS;` + 使能 `PIEIERn`/`IER` + ISR 内清 `PIEACK` |
+| **并发读**（波形回读 / 观测）| 中断里更新的量（`XxxCtrl.usCmpA/B/C`、`fDuty*`、`fVd`…）在主循环读时**必须先快照**：`DINT; snap=…; EINT;`（≈20ns）再用快照。**绝不许"一边慢慢发串口、一边反复读全局变量"** → 波形会出现垂直毛刺（见 `references/ti-official-style.md` §4.5）|
 | 看门狗 | `InitSysCtrl()` 内部已 `DisableDog()`，不要再手写 `WDCR` |
 | 链接脚本 | 默认 `28335_RAM_lnk.cmd`（RAM 调试，掉电丢失）；要脱机运行需换 Flash 链接 |
 | **RAM 空间**（加模块前必查） | `.text` 撞顶 = 链接报 `#10099-D`。先跑 `scripts\check_ram_layout.ps1` 判定是"跨片"还是"真不够"；本工程已合并成连续大块（`RAMCODE`=L0~L3 16K 字、`RAMDATA`=L4~L7 16K 字）。详见 `references/ram-and-linker.md`。⚠️ C2000 编译器**默认不按函数分段**：一个 `.c` 里只要有一个函数被引用，**整份 `.c`** 都会进程序段 —— 所以"临时/自测/可选"功能要**单独成文件** |
