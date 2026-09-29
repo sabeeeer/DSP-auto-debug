@@ -21,16 +21,16 @@ agent 的通用 skill 格式（CodeBuddy、Claude Code、Codex 都读 `SKILL.md`
 
 ```powershell
 # 先干跑，看它打算做什么（不改任何东西）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target codex -DryRun
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target codex -DryRun
 
 # 装给 Codex      -> ~/.codex/skills/ti-c2000-ccs-auto
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target codex
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target codex
 
 # 装给 Claude Code -> ~/.claude/skills/ti-c2000-ccs-auto
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target claude
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target claude
 
 # 装到任意目录（自研 agent / 便携版）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target custom -SkillsRoot D:\agent\skills
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target custom -SkillsRoot D:\agent\skills
 
 # 不想让它碰 CodeBuddy 的配置文件
 ... -NoHooks
@@ -59,7 +59,7 @@ PowerShell、能读到 `SKILL.md`，就可用。
 ## TI C2000 / CCS 工程（DSP2833x、F2837x 等）
 
 改任何 `.c/.h/.cproject` 后，必须跑一次编译链接自检，看到 `RESULT: OK` 才算通过：
-  powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
 
 要上板验证：
   ... ti_c2000_debug.ps1 -ProjectPath "<工程>" -Build -Run -ReadVars "<寄存器/变量,逗号分隔>"
@@ -75,12 +75,13 @@ CONNECT_FAILED / LOADTI_ERROR / LOADTI_TIMEOUT / NO_PROBE / NO_OUT_FILE / ENV_*�
 2. **`.cproject` 里的 TI 头文件是绝对路径**：换机器/换目录后要在 CCS 里改
    （Project → Properties → Build → C2000 Compiler → Include Options），否则报
    `cannot open source file "DSP2833x_Device.h"`；脚本会先打 `WARNING : include path missing on disk`。
-3. **Windows + PowerShell 5.1**（脚本保持纯 ASCII，规避 GBK 读取无 BOM UTF-8 的问题）。
+3. **Windows + PowerShell 7.0+（pwsh）**：脚本首行 `#requires -Version 7.0`；仍保持纯 ASCII（历史约定 + 避免编码坑）。
+   注意 `Get-WmiObject` 在 7.x 已移除，枚举仿真器用 `Get-CimInstance`。
 4. 上板还需要仿真器驱动（XDS100/110/200/510/560、J-Link 等）；目前硬件实测只覆盖 DSP28335 + XDS100。
 
 ## 6. 迁移后自检
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\scripts\ti_c2000_build.ps1 -ProjectPath <工程>
+pwsh -NoProfile -ExecutionPolicy Bypass -File <skill>\scripts\ti_c2000_build.ps1 -ProjectPath <工程>
 # 期望输出：CONFIG / DEFINES / EXCLUDED 三行正常 + compile: OK + link: OK + RESULT: OK
 ```

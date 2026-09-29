@@ -43,6 +43,13 @@
 **driverlib / SysConfig 型工程**：`.syscfg` 生成的文件（`ti_drivers_config.c/h` 等）是 CCS 构建时产出的。
 本脚本只会编译磁盘上已有的 `.c/.asm`，所以这类工程请先在 CCS 里构建一次（或用 SysConfig CLI 生成）再用本脚本做回归自检；本机未实测该流程。
 
+**C2000Ware Core SDK（本机 `F:\c2000ware-core-sdk`）的 cmd 与驱动位置**（细节见 `references/c2000ware-guide.md` §4）：
+- 2837xD（双核）：CPU1/CPU2 各一份 `2837xD_{RAM|FLASH}_lnk_cpuN.cmd`（`device_support\f2837xd\common\cmd\`）
+  ＋ `F2837xD_Headers_nonBIOS_cpuN.cmd`（`...\headers\cmd\`）；
+- 2837xS（单核）：`2837xS_Generic_{RAM|FLASH}_lnk.cmd` ＋ `F2837xS_Headers_nonBIOS.cmd`；
+- 变体：`_far`（远地址）/`_CLA`/`_IQMATH`/`_TMU`/`_SGEN`/`_USB`/`_IPC`（双核通信）/`_DCSM`/`_crc`/`_shared`；
+- SysConfig 的 "Linker CMD Tool"（动态生成 device_cmd.cmd）**不支持 F2833x**，28335 用静态 cmd。
+
 ## 3. 仿真器对照
 
 | 仿真器 | Windows 里的枚举名（硬件检查用） | `.ccxml` 里的连接名 | 备注 |
@@ -58,6 +65,44 @@
 
 **决定连什么的是 `.ccxml`，不是脚本**：换仿真器在 CCS 里建/改 target configuration，然后 `-Ccxml <文件>`（默认取 `targetConfigs\` 下第一个）。
 驱动器没枚举出来时：`-NoProbeCheck` 可跳过前置检查（连接失败时 loadti/DSS 仍会明确报错）。
+
+### 3.1 探针版本 ↔ 连接类型互改（v1 / v2 / v3 / XDS110 ...）
+
+`.ccxml` 里的连接类型必须与探针硬件版本一致；不一致的典型症状是"能连上但时好时坏"，
+下载随机失败报 `Error -151` 或 `Error -1135`（此时设备管理器往往一切正常，别被它骗了）。
+
+**用脚本一键互改**（推荐；本机实测 v2→v1→v3→v2 三向切换均正常）：
+
+```powershell
+# 看当前是什么
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程>
+# 切成 XDS100v2 / v1 / v3 / XDS110 ...
+... ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2
+... ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v3 -DryRun   # 只报告不写
+... ti_c2000_set_probe.ps1 -List                                   # 列出本机所有可选连接
+```
+
+它一次改齐**两处**（都自动备份 `.bak`）：`targetConfigs\*.ccxml`（instance 的 desc/href/xml、
+connection 的 id、driver 的 href/xml）和 `.ccsproject` 的 `<connection value="..."/>`；
+驱动名按 targetdb 的 `connectionType` 推导（见下表，注意 **v3 复用 v2 的驱动**）。
+
+**版本 ↔ 文件名对照**（`<CCS>\ccs_base\common\targetdb\`，本机 CCS12.8 实测）：
+
+| 探针 | connection xml | connectionType | C28x driver xml |
+|---|---|---|---|
+| XDS100v1 | `TIXDS100usb_Connection.xml` | `TIXDS100` | `tixds100c28x.xml` |
+| XDS100v2 | `TIXDS100v2_Connection.xml` | `TIXDS100v2` | `tixds100v2c28x.xml` |
+| XDS100v3 | `TIXDS100v3_Dot7_Connection.xml` | `TIXDS100v2`（复用） | `tixds100v2c28x.xml` |
+| XDS110 | `TIXDS110_Connection.xml` | `TIXDS110` | `tixds110c28x.xml`（按同规律） |
+
+**手动改的要点**（脚本不可用时）：上面**两处都要改**，只改一处等于没改 ——
+ccxml 决定用哪种连接，`.ccsproject` 是工程级记录。改完跑 `ti_c2000_debug.ps1 -Run`，
+确认打印的 `TARGET: ...` 与手里的探针一致即可。
+`ti_c2000_debug.ps1` 本身不用动（默认取 `targetConfigs\` 下第一个 ccxml，或 `-Ccxml <文件>`）。
+
+**改对了仍报 `-151/-1135` 才去查硬件**：拔插探针 USB（错误里的 "reset the debug probe"；正常会枚举
+**3 个设备**：`XDS100 Class USB Serial Port (COMx)` + `Debug Port` + `Auxiliary Port`，少了串口那路就是异常）
+→ 查 JTAG 排线/板子供电 → 再怀疑 CCS 调试会话占用、USB 线/探针硬件。
 
 ## 4. 双核 / 多核器件怎么办
 

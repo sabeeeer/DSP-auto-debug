@@ -30,10 +30,10 @@ git clone https://github.com/sabeeeer/git-autosnapshot-codebuddy.git "$skills\gi
 
 ```powershell
 # 先看它会做什么（不改任何东西）
-powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.codebuddy\skills\ti-c2000-ccs-auto\setup\Setup-CCS-Skills.ps1" -DryRun
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$HOME\.codebuddy\skills\ti-c2000-ccs-auto\setup\Setup-CCS-Skills.ps1" -DryRun
 
 # 正式执行（按需取舍参数）
-powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.codebuddy\skills\ti-c2000-ccs-auto\setup\Setup-CCS-Skills.ps1" `
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$HOME\.codebuddy\skills\ti-c2000-ccs-auto\setup\Setup-CCS-Skills.ps1" `
   -GitSource "$HOME\.codebuddy\skills\git-management" `
   -GitName  "你的GitHub登录名" `
   -GitEmail "你的noreply邮箱或验证邮箱" `
@@ -63,9 +63,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.codebuddy\skills\ti-
 5. **验证**：
    ```powershell
    # 只要编译链接（不需要硬件）
-   powershell -NoProfile -ExecutionPolicy Bypass -File "<skills>\ti-c2000-ccs-auto\scripts\ti_c2000_build.ps1" -ProjectPath "<工程>"
+   pwsh -NoProfile -ExecutionPolicy Bypass -File "<skills>\ti-c2000-ccs-auto\scripts\ti_c2000_build.ps1" -ProjectPath "<工程>"
    # 下载运行 + 读回（需要探针+板子上电）
-   powershell -NoProfile -ExecutionPolicy Bypass -File "<skills>\ti-c2000-ccs-auto\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run -ReadVars "EPwm1Regs.TBPRD"
+   pwsh -NoProfile -ExecutionPolicy Bypass -File "<skills>\ti-c2000-ccs-auto\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run -ReadVars "EPwm1Regs.TBPRD"
    ```
 6. **重启 CodeBuddy 会话**，让新 skill 与 hooks 生效。
 

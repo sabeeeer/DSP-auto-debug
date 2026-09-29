@@ -90,7 +90,20 @@ if (MODE === "full") {
             // halt/evaluate/resume - guarded so no exception noise is produced
             try { if (!session.target.isHalted()) { session.target.halt(); } } catch (e2) { }
             try { ready = ("" + session.expression.evaluate(WAIT_EXPR)) !== "0"; } catch (e3) { ready = false; }
-            if (ready) { print("DSS: ready ('" + WAIT_EXPR + "') after " + waited + " ms"); break; }
+            if (ready) {
+                print("DSS: ready ('" + WAIT_EXPR + "') after " + waited + " ms");
+                if (waited <= 500) {
+                    // "Ready" at the first/second poll is suspicious: loadProgram() does NOT clear
+                    // .bss, so a global struct/variable can already be non-zero from RAM leftovers
+                    // while the program has not reached the code that (re)writes it (seen on
+                    // 4-1Two_Level: 'OpenLoopCtrl.usCmpA != 0' fired at 250 ms while SCILBAUD/TBPRD
+                    // were still 0). A peripheral register is a far better readiness test.
+                    print("NOTE    : ready within " + waited + " ms - if that expression is a .bss variable");
+                    print("          this may be a RAM leftover, not proof the init code ran. Cross-check");
+                    print("          with a peripheral register, e.g. -WaitFor \"EPwm1Regs.TBPRD == <value>\".");
+                }
+                break;
+            }
             try { if (session.target.isHalted()) { session.target.runAsynch(); } } catch (e4) { }
         }
         if (!ready) { print("WAIT_TIMEOUT: '" + WAIT_EXPR + "' not reached within " + budget + " ms"); }

@@ -1,3 +1,4 @@
+#requires -Version 7.0
 # =====================================================================
 # ti_c2000_debug.ps1
 #   Automatic "build -> load into debugger -> run -> read back" for
@@ -11,6 +12,11 @@
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -Build -Run
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -Build -Run -RunMs 2000 -ReadVars "g_cnt,EPwm1Regs.TBPRD"
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -ReadOnly -ReadVars "EPwm1Regs.TBPRD"
+#
+#   -WaitFor / default readiness test: prefer a PERIPHERAL REGISTER (e.g. "EPwm1Regs.TBPRD == 14999",
+#   "SciaRegs.SCILBAUD != 0").  loadProgram() does NOT clear .bss, so a global variable can already be
+#   non-zero from RAM leftovers and would report "ready" in 250 ms while the init code has not run yet
+#   (symptom: TBPRD / SCILBAUD still read 0).  The DSS template warns when ready comes that early.
 #     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #   Exit code: 0 OK | 1 failure | 2 environment/toolchain problem | 3 no probe
 # =====================================================================
@@ -54,7 +60,12 @@ if ($Background -and -not $Detached) {
         else { $argList += "-$k"; $argList += "`"$v`"" }
     }
     $argList += '-Detached'
-    Start-Process -FilePath 'powershell' -ArgumentList $argList -WindowStyle Hidden `
+    # ★一律用 PowerShell 7 引擎：本脚本首行是 #requires -Version 7.0，
+    #   所以 $PSHOME 就是 PS7 安装目录 ——用它启动后台实例，绝不退回 Windows PowerShell 5.1
+    #   （退回 5.1 时子脚本会因为自己的 #requires 直接失败：ScriptRequiresUnmatchedPSVersion）。
+    $pwshExe = Join-Path $PSHOME 'pwsh.exe'
+    if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }   # 兜底走 PATH
+    Start-Process -FilePath $pwshExe -ArgumentList $argList -WindowStyle Hidden `
                   -RedirectStandardOutput $log -RedirectStandardError $errLog | Out-Null
     Out2 "BACKGROUND: started detached, log = $log"
     Out2 "HINT    : poll with   Select-String -Path '$log' -Pattern 'RESULT|^VAR |ready|BACKGROUND'"
@@ -125,7 +136,11 @@ if ($Build) {
     $buildScript = Join-Path $PSScriptRoot 'ti_c2000_build.ps1'
     $bargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-ProjectPath', $ProjectPath)
     if ($CcsRoot) { $bargs += @('-CcsRoot', $CcsRoot) }
-    $bout = & powershell @bargs 2>&1
+    # ★引擎统一：用 PowerShell 7（pwsh）跑子脚本，绝不退回 Windows PowerShell 5.1
+    #   （退回 5.1 时 ti_c2000_build.ps1 会因自身 #requires -Version 7.0 直接失败）
+    $pwshExe = Join-Path $PSHOME 'pwsh.exe'
+    if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }   # 兜底走 PATH
+    $bout = & $pwshExe @bargs 2>&1
     $bcode = $LASTEXITCODE
     if (-not $Quiet) { $bout | Select-Object -Last 12 | ForEach-Object { Out2 $_ } }
     if ($bcode -ne 0) {
@@ -184,7 +199,7 @@ Info2 "LOADTI  : $loadti"
 # probe detection covers TI XDS family (XDS100/110/200/510/560), Spectrum Digital,
 # Blackhawk, SEGGER J-Link and other JTAG probes that ccxml files can reference
 $probePatterns = 'XDS|Texas Instruments.*(Debug|Emulat|Probe)|Debug Probe|Spectrum Digital|Blackhawk|SEGGER|J-Link|ICDI'
-$probe = @(Get-WmiObject Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $probePatterns })
+$probe = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $probePatterns })
 if ($isSim) {
     Info2 "PROBE   : skipped (simulator target, no hardware needed)"
     $probe = @([pscustomobject]@{ Name = 'TI simulator' })

@@ -1,3 +1,4 @@
+#requires -Version 7.0
 # =====================================================================
 # ti_c2000_build.ps1
 #   Compile + link self-check for TI C2000 CCS projects WITHOUT the CCS GUI.
@@ -12,7 +13,7 @@
 #     - runtime library: COFF vs EABI naming, fpu32/fpu64/softlib
 #
 #   Usage:
-#     powershell -ExecutionPolicy Bypass -File ti_c2000_build.ps1 -ProjectPath <proj>
+#     pwsh -ExecutionPolicy Bypass -File ti_c2000_build.ps1 -ProjectPath <proj>
 #     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #     ... -CompilerRoot <ti-cgt-c2000_x.y.z.LTS>
 #     ... -LinkCmd "extra1.cmd,extra2.cmd"  add linker command files
@@ -396,10 +397,22 @@ if ($libExcluded.Count -gt 0) {
 }
 
 # ---------- 4. sources ----------
+# CCS compiles every .c/.asm of the project: <sourceEntries><entry name=""/> means "whole
+# project", minus the 'exclude from build' list handled above.  So besides the usual roots
+# (APP / User / DSP2833x_Libraries) any other top-level folder counts as well - a module
+# may legitimately live next to APP/ (e.g. <project>\OpenLoop\).  Known non-source dirs
+# are skipped.
 $srcRoots = @()
 foreach ($sub in @('APP', 'User', 'DSP2833x_Libraries')) {
     $p = Join-Path $ProjectPath $sub
     if (Test-Path $p) { $srcRoots += $p }
+}
+$nonSrcDirs = @('Debug', 'Release', '.git', '.launches', '.settings', '.metadata',
+                '.codebuddy', 'targetConfigs', 'auto_build', 'obj')
+foreach ($d in @(Get-ChildItem -Path $ProjectPath -Directory -ErrorAction SilentlyContinue)) {
+    if (($nonSrcDirs -notcontains $d.Name) -and ($srcRoots -notcontains $d.FullName)) {
+        $srcRoots += $d.FullName
+    }
 }
 if ($srcRoots.Count -eq 0) { $srcRoots = @($ProjectPath) }
 $srcAll = @(Get-ChildItem -Path $srcRoots -Recurse -File -Include '*.c', '*.asm' -ErrorAction SilentlyContinue |

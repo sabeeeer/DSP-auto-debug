@@ -1,3 +1,4 @@
+#requires -Version 7.0
 # =====================================================================
 # Setup-CCS-Skills.ps1  --  bootstrap the CodeBuddy skills on a new PC
 #
@@ -14,8 +15,8 @@
 #        token/login, XDS driver, project include paths, hardware)
 #
 #   Usage (new machine, right after cloning):
-#     powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -DryRun
-#     powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 `
+#     pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -DryRun
+#     pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 `
 #         -GitSource ..\git-management -GitName "your-login" -GitEmail "you@example.com" `
 #         -Proxy http://127.0.0.1:12450
 #
@@ -110,10 +111,18 @@ if (-not $doHooks) {
 }
 $settingsPath = Join-Path $HOME '.codebuddy\settings.json'
 $gitScript    = Join-Path $SkillsRoot 'git-management\scripts'
+# Hooks MUST pin PowerShell 7 by absolute path: a bare 'powershell' resolves to Windows
+# PowerShell 5.1, and every skill script now declares '#requires -Version 7.0'.
+$pwshExe = Join-Path $env:LOCALAPPDATA 'Microsoft\PowerShell\7\pwsh.exe'
+if (-not (Test-Path -LiteralPath $pwshExe)) {
+    Write-Output ("   [WARN] PowerShell 7 not found at " + $pwshExe)
+    Write-Output "   [WARN] install PowerShell 7 (current user) before the hooks can run"
+}
+$hookCmd = '"' + $pwshExe + '" -NoProfile -ExecutionPolicy Bypass -File '
 $hookDefs = @(
-    @{ name = 'SessionStart'; json = @{ matcher = 'startup'; hooks = @(@{ type = 'command'; command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$gitScript\sessionstart.ps1`""; timeout = 30 }) } },
-    @{ name = 'PostToolUse';  json = @{ matcher = 'Write|Edit|write_to_file|replace_in_file'; hooks = @(@{ type = 'command'; command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$gitScript\autosnapshot.ps1`""; timeout = 30 }) } },
-    @{ name = 'SessionEnd';   json = @{ matcher = '*'; hooks = @(@{ type = 'command'; command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$gitScript\autosnapshot.ps1`" -Stop"; timeout = 20 }) } }
+    @{ name = 'SessionStart'; json = @{ hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\sessionstart.ps1" + '"'; timeout = 30 }) } },
+    @{ name = 'PostToolUse';  json = @{ matcher = 'Write|Edit|write_to_file|replace_in_file|MultiEdit|create_file|replace_string_in_file|multi_replace_string_in_file'; hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '"'; timeout = 30 }) } },
+    @{ name = 'SessionEnd';   json = @{ hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '" -IntervalSeconds 0'; timeout = 60 }, @{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '" -Stop'; timeout = 20 }) } }
 )
 if (-not $doHooks) {
     # nothing to do (see above)
@@ -172,13 +181,13 @@ if ($ProjectPath) {
         Write-Output "   [FAILED] build script missing: $buildScript"
     } else {
         Apply-Step ("build self-check on " + $ProjectPath) {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $buildScript -ProjectPath $ProjectPath -Quiet |
+            & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildScript -ProjectPath $ProjectPath -Quiet |
                 ForEach-Object { Write-Output ("      " + $_) }
         }
     }
 } else {
     Note "no -ProjectPath given; run this later to verify toolchain + project:"
-    Note ("powershell -NoProfile -ExecutionPolicy Bypass -File `"$repoRoot\scripts\ti_c2000_build.ps1`" -ProjectPath <CCS project>")
+    Note ("pwsh -NoProfile -ExecutionPolicy Bypass -File `"$repoRoot\scripts\ti_c2000_build.ps1`" -ProjectPath <CCS project>")
 }
 
 # ---------- 7. manual checklist ----------

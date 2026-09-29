@@ -10,7 +10,7 @@
 │   ├─ DSP2833x_*.c / *.asm
 │   ├─ 28335_RAM_lnk.cmd          # RAM 链接（.cproject 指定）
 │   └─ DSP2833x_Headers_nonBIOS.cmd
-├─ targetConfigs/TMS320F28335.ccxml   # XDS100v1 + TMS320F28335
+├─ targetConfigs/TMS320F28335.ccxml   # XDS100v2 + TMS320F28335（连接类型必须与探针版本一致，见 other-devices-and-probes.md §3.1）
 ├─ Debug/                         # CCS 自动生成；只放脚本同步来的 <工程>.out（obj/map/log 都在 %TEMP%）
 ├─ .cproject / .project
 ```
@@ -67,10 +67,22 @@
    否则报 `cannot open source file "xxx.h"`。
 3. 在 `User/main.c` 里调用；然后跑 `ti_c2000_build.ps1` 验证。
 4. 模块函数统一前缀，避免与既有模块（尤其 `error()`、`Init()`、`xxx_isr()`）撞名。
+5. **目录名一律 ASCII**：TI 编译器打不开含中文的路径（报 `Fatal error #1965: cannot open source file "...\乱码\x.c"`）。
+6. **加完编译一次看 `.text`**：若报 `#10099-D`（装不下），先跑 `scripts\check_ram_layout.ps1` 判定
+   "跨片"还是"真不够"，再按 [ram-and-linker.md](ram-and-linker.md) 处置。
+   ⚠️ "临时/自测/可选"功能一定**单独成文件** —— C2000 编译器默认不按函数分段，
+   同 `.c` 里有一个函数被引用就会把整份代码链进程序段。
 
 ## 工具链（实测）
 
 - `.cproject` 声明 `OPT_CODEGEN_VERSION = 15.12.1.LTS`、`OUTPUT_FORMAT = COFF`、`LINKER_COMMAND_FILE = 28335_RAM_lnk.cmd`。
+- **链接脚本已改造为"连续大块"**（`DSP2833x_Libraries\28335_RAM_lnk.cmd`）：把 SARAM 合并成两片连续内存，
+  避免 `.text` 跨片触发 trampoline 报错，同时把代码/数据空间都扩到 16K 字：
+  - `RAMCODE` = L0~L3 = `origin 0x008000, length 0x004000`（16K 字）→ `.text` / `ramfuncs` / `.cinit` / `.pinit` / `.switch` / `IQmath`
+  - `RAMDATA` = L4~L7 = `origin 0x00C000, length 0x004000`（16K 字）→ `.ebss` / `.econst`
+  ⚠️ 该文件是 **GBK 编码**：用 PowerShell 改它必须按 936 读写（否则中文注释变乱码，不可逆）。
+  改完先跑 `pwsh -File scripts\check_ram_layout.ps1 -ProjectPath <工程>` 确认"未跨片、无 PAGE 冲突"。
+  空间再不够的处置（取消函数分段 / 上 Flash）：见 [ram-and-linker.md](ram-and-linker.md)。
 - 该工程**两个编译器都验证通过**：CCS12 自带的 `ti-cgt-c2000_22.6.1.LTS`（日常用它）与 CCS6 的 `15.12.1.LTS`（`C:\ti\ccsv6`）。
 - 自动构建脚本按"**.cproject 声明的版本优先，没有就用该 CCS 自带的新版**"选择编译器，并自动挑运行库（COFF→`rts2800_fpu32.lib`，EABI→`*_eabi.lib`）。
 - `Debug/` 里的 `makefile / subdir_*.mk` 是 CCS 自动生成的，不要手改；已被清理过一次，CCS GUI 构建时会重新生成。
@@ -83,5 +95,6 @@
 - 受保护寄存器（`SysCtrlRegs`、`GpioCtrlRegs`、`EPwm*Regs` 的配置位）必须 `EALLOW; ... EDIS;`。
 - FPU32：`float` 才有硬件加速，避免 `double`；ISR 里别做浮点/除法/字符串输出。
 - 自定义 ISR：`EALLOW; PieVectTable.Xxx = &isr; EDIS;` → 使能 `PieCtrlRegs.PIEIERn` 和 `IER` → 全局 `EINT` → ISR 内 `PieCtrlRegs.PIEACK.bit.ACKn = 1`。
-- 当前链接脚本是 **RAM 版**（`28335_RAM_lnk.cmd`），掉电即失；要脱机运行需换 Flash 链接脚本并做 Flash 初始化。
+- 链接脚本是 **RAM 版**（`28335_RAM_lnk.cmd`，已改造为 `RAMCODE`/`RAMDATA` 两片连续大块，见上「工具链」），掉电即失；
+  要脱机运行需换 Flash 链接脚本并做 Flash 初始化（F28335 Flash = 256K 字，是片上 RAM 的 8 倍）。
 - `main()` 用 `while(1)` 常驻；`User/main.c` 是工程唯一入口，别新增第二个 `main`。

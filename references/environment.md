@@ -16,9 +16,9 @@
 | CCS 6（备选，老工程用） | `C:\ti\ccsv6`（TI 默认安装位置） | 已安装 |
 | CCS6 的 C2000 编译器 | `C:\ti\ccsv6\tools\compiler\ti-cgt-c2000_15.12.1.LTS` | 存在 |
 | CCS6 的 DSS / loadti | `C:\ti\ccsv6\ccs_base\scripting\{bin\dss.bat, examples\loadti\loadti.bat}` | 存在 |
-| 目标配置 | `<工程>\targetConfigs\*.ccxml`（实测为 `TMS320F28335.ccxml`） | XDS100v1 + TMS320F28335 |
+| 目标配置 | `<工程>\targetConfigs\*.ccxml`（实测为 `TMS320F28335.ccxml`） | **XDS100v2** + TMS320F28335（2026-09-24 纠正：原先误配成 v1，连接时好时坏报 `-151`/`-1135`，详见 other-devices-and-probes.md 第 4 节） |
 | 头文件来源 | `<TI_C2000_EXAMPLES>\DSP2833x_Libraries\DSP2833x_common\include`、`...\DSP2833x_headers\include` | 工程 `.cproject` 用绝对路径引用，**编译硬依赖**（换机器要同步改 include 路径） |
-| 仿真器 | XDS100（Windows 枚举为 `XDS100 Class USB Serial Port (COM9)` / `XDS100 Class Debug Port` / `XDS100 Class Auxiliary Port`） | 已连接可用 |
+| 仿真器 | **XDS100v2**（Windows 枚举为 `XDS100 Class USB Serial Port (COM9)` / `XDS100 Class Debug Port` / `XDS100 Class Auxiliary Port`） | 已连接可用。**连接类型必须选 v2**（`TIXDS100v2_Connection.xml`），否则"能连上但时好时坏" |
 
 ## 已验证（有实测证据）
 
@@ -58,8 +58,10 @@
    `ti_c2000_build.ps1` 每次运行都会把它们移到 `%TEMP%\ti_c2000_launch_backup\<工程>\<时间戳>\`
    （可恢复，`-KeepLaunches` 保留原位）；走命令行的 loadti/DSS 不读这些文件，GUI 里需重新建调试配置。
 8. 本机 PowerShell 限制 `Set-Content` 无显式编码、管道删除等写法；脚本统一用 `-LiteralPath` / 显式编码 / .NET API。
-9. **`.ps1` 脚本里禁止写中文**（重要）：PowerShell 5.1 对无 BOM 的 UTF-8 文件按 ANSI(GBK) 读取，
+9. **`.ps1` 脚本里仍建议不写中文**（约定延续）：现在引擎固定为 **PowerShell 7.x**（首行 `#requires -Version 7.0`），
+   7.x 默认按 UTF-8 读脚本，中文注释不会再崩溃；但为兼容性与可持续性，脚本仍保持纯 ASCII 输出与注释，
+   中文只放在 `.md` 文档里。
+   历史踩坑（5.1 时代，已不再触发）：PowerShell 5.1 对无 BOM 的 UTF-8 文件按 ANSI(GBK) 读取，
    中文后紧跟的 `"` 会被当成双字节字符的一部分被"吃掉"，导致字符串未闭合、脚本整套语法崩掉
    （实测踩过：`Out2 "HINT2 : …跳过本检查"` 一个中文尾字即让脚本无法运行）。
-   规避：两个 `.ps1` 保持纯 ASCII 输出与注释，中文只放在 `.md` 文档里（`.md` 用 read_file 读，UTF-8 正常）。
    自检命令：`$errs=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$errs); $errs.Count`

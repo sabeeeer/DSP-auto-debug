@@ -67,19 +67,19 @@ Linux/mac: ~/.codebuddy/skills/ti-c2000-ccs-auto/
 - **必需**：Code Composer Studio 12.x 或 6.x（自带 `ti-cgt-c2000_*` 编译器、`ccs_base\scripting` 下的 DSS 与 loadti）
 - **可选**：XDS100/110/200/510/560、SEGGER J-Link、Blackhawk、Spectrum Digital 等 JTAG 仿真器
   （**只做编译链接自检不需要硬件**；TI 模拟器 tisim 目标也不需要）
-- 运行环境：Windows + PowerShell 5.1
+- 运行环境：Windows + **PowerShell 7.0+（pwsh，本机 7.6.6 实测）**，脚本首行 `#requires -Version 7.0`
 
 ## 5. 快速开始
 
 ```powershell
 # ① 只做编译+链接自检（几秒，不需要硬件、不打开 CCS）
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<CCS工程根目录>"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<CCS工程根目录>"
 
 # ② 构建 + 下载运行
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run
+pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run
 
 # ③ 构建 + 下载运行 + 读回寄存器/变量（最完整验证）
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run `
+pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run `
   -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,SciaRegs.SCILBAUD"
 
 # ④ 5 分钟级长调试，后台跑
@@ -116,8 +116,8 @@ powershell ... -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 
 
 ## 8. 注意
 
-- `scripts/*.ps1` 保持**纯 ASCII**：PowerShell 5.1 按 ANSI(GBK) 读取无 BOM 的 UTF-8 文件时，
-  中文尾字后紧跟的 `"` 会被吞掉导致语法错误。中文说明一律放在 `.md` 里。
+- `scripts/*.ps1` 要求 **PowerShell 7.0+**（首行 `#requires -Version 7.0`，示例统一用 `pwsh`）；
+  脚本仍保持**纯 ASCII**（历史约定 + 避免编码坑），中文说明一律放在 `.md` 里。
 - 默认链接脚本多为 RAM 版（如 `28335_RAM_lnk.cmd`），**掉电即失**；要脱机运行需换 Flash 链接脚本。
 - 调试器操作会打断目标板当前程序；`-ReadVars` 会复位并运行被加载的程序。
 - 本仓库不含任何密钥；`references/environment.md` 里的路径是本机实测记录，可按需替换。
