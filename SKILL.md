@@ -174,6 +174,8 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | `error #10099-D: program will not fit into available memory`（报错位置指向 `.cmd` 的 `.text` 行）| **两种完全不同的原因**：① `.text` 段真的太小；② 该段被放在**多个不连续内存块**（`> A \| C`）—— 此时报错文本会带 **`trampoline`** 字样，**再扩空间也没用**。先跑 `scripts\check_ram_layout.ps1` 判定，再照 `references/ram-and-linker.md` 合并成连续大块（`RAMCODE`/`RAMDATA`）或改 Flash 链接 |
 | 只加了一个小模块，`.text` 却突然多出 2~3K 字 | C2000 编译器**默认不按函数分段**（`--gen_func_subsections` 关）：一个函数被引用 → **整份 `.c`** 被链进来。解法：把"临时/自测/可选"功能**单独成文件**（没人引用就整份不占空间）|
 | `Fatal error #1965: cannot open source file "...\乱码\x.c"` | 工程里有**中文目录名**，TI 编译器不认。目录/文件名一律改 ASCII |
+| 改了代码但板子现象完全没变 / 上位机没波形 | **先确认构建真的 OK**：构建失败时 `.out` **不会更新**，下载/运行的还是上一次的产物（现象=旧代码），极易误判成"改动无效"。盯住第一条编译错误——`xxx.h, line 1: error #7: unrecognized token` / `#171: expected a declaration` 常见于**文件行首混入非法字符**（反引号 `` ` ``=0x60、零宽字符、BOM 之外的杂字节）：`[IO.File]::ReadAllBytes($f)[0..7]` 看首字节即可定位并删掉（实测 2026-09-30：spwm.h 行首一个反引号 → 3 个文件编译失败 → 板子里跑旧程序 → SerialPlot 全白）|
+| DSS 读回的浮点/结构体成员与实际不符 | 实测（2026-09-30）：`SvpwmYjbVsCtrl.fModul/fDa/fDb/fDc` 读回 0，但串口实测帧证明运行值非 0（m=0.7、d=75~925）。**不要只凭一次 DSS 读数下结论**，用"外设寄存器 / 串口实测帧"交叉验证；同一次读数里整数成员（usEnable/usSmallN/usCmpA）是正常的 |
 | 下载成功但现象不对 | 先看 RAM/Flash 链接脚本、看门狗、时钟；再用 `-ReadVars` 读关键寄存器对照源码 |
 | `The script 'x.ps1' cannot be run because it contained a "#requires" statement for Windows PowerShell 7.0`（`ScriptRequiresUnmatchedPSVersion`）| 用 Windows PowerShell 5.1（`powershell.exe`）跑了要求 PS7 的脚本。**本机统一用 pwsh 7.6**（`%LOCALAPPDATA%\Microsoft\PowerShell\7\pwsh.exe`）：自己执行命令时用 `pwsh`；脚本内部启动子进程也要用 `$PSHOME\pwsh.exe` 而不是 `powershell`（`ti_c2000_debug.ps1` 的 `-Build` 与后台实例早先踩过，已修）|
 
