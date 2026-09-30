@@ -36,8 +36,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Targ
 ... -NoHooks
 ```
 
-**hooks 只有 CodeBuddy 用得上**：git 快照的 3 个 hook 写在 `~/.codebuddy/settings.json`，而且 PostToolUse
-匹配的是 CodeBuddy 的工具名（`write_to_file|replace_in_file`）。给别的 agent 安装时脚本自动跳过，
+**hooks 只有 CodeBuddy 用得上**：git 快照的 4 组 hook 写在 `~/.codebuddy/settings.json`，而且 hook
+匹配的是 CodeBuddy 的工具名（`delete_file|write_to_file|replace_in_file`）。给别的 agent 安装时脚本自动跳过，
 也可以用 `-NoHooks` 显式跳过。
 
 ## 3. 迁移后会"少"什么

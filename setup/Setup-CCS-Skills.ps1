@@ -103,7 +103,7 @@ if ($GitSource) {
 
 # ---------- 3. merge hooks into settings.json (CodeBuddy only) ----------
 # The git-management hooks use CodeBuddy's hook schema AND its tool names
-# (write_to_file / replace_in_file), and they live in ~/.codebuddy/settings.json which no other
+# (delete_file / write_to_file / replace_in_file), and they live in ~/.codebuddy/settings.json which no other
 # agent reads - so this step only runs for -Target codebuddy (and not with -NoHooks).
 Step "hooks (CodeBuddy only)"
 if (-not $doHooks) {
@@ -121,6 +121,7 @@ if (-not (Test-Path -LiteralPath $pwshExe)) {
 $hookCmd = '"' + $pwshExe + '" -NoProfile -ExecutionPolicy Bypass -File '
 $hookDefs = @(
     @{ name = 'SessionStart'; json = @{ hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\sessionstart.ps1" + '"'; timeout = 30 }) } },
+    @{ name = 'PreToolUse';   json = @{ matcher = 'delete_file|delete_files'; hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '" -IntervalSeconds 0 -Message "pre-delete snapshot"'; timeout = 60 }) } },
     @{ name = 'PostToolUse';  json = @{ matcher = 'Write|Edit|write_to_file|replace_in_file|MultiEdit|create_file|replace_string_in_file|multi_replace_string_in_file'; hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '"'; timeout = 30 }) } },
     @{ name = 'SessionEnd';   json = @{ hooks = @(@{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '" -IntervalSeconds 0'; timeout = 60 }, @{ type = 'command'; command = $hookCmd + '"' + "$gitScript\autosnapshot.ps1" + '" -Stop'; timeout = 20 }) } }
 )
