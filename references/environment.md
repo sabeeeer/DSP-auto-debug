@@ -65,3 +65,13 @@
    中文后紧跟的 `"` 会被当成双字节字符的一部分被"吃掉"，导致字符串未闭合、脚本整套语法崩掉
    （实测踩过：`Out2 "HINT2 : …跳过本检查"` 一个中文尾字即让脚本无法运行）。
    自检命令：`$errs=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$errs); $errs.Count`
+
+## 补充：本机 TI 资源位置（2026-09-30 实测）
+
+| 资源 | 路径 | 内容 |
+|---|---|---|
+| **C2000Ware Core SDK** | `F:\c2000ware-core-sdk` | v26.00.00.00.STS；device_support（f2833x 等 20+ 器件）+ driverlib + libraries（ai/calibration/communications/DCL/dsp/math）|
+| **controlSUITE** | `F:\controlSUITE` | 老版；`libs\app_libs\motor_control\{math_blocks,libs,drivers}` 含 **DMC 电机库**（`svgen_dq.h` 等 SVPWM 宏，仅两电平）+ 40+ `development_kits\` |
+| CCS | `C:\ti\ccsv6`（v6）+ `F:\ccs`（v12） | 见 `TI_CCS_ROOT` 探测 |
+
+> 检索一律走 `scripts\c2000ware_find.ps1`（自动定位 + 全库 grep），不要手写 Get-ChildItem。

@@ -129,3 +129,20 @@ pin_map / sci / sdfm / spi / sysctl / upp / usb / xbar / version（+ `hw_*.h` �
    `dsp\FixedPoint` 有 2833x 版例程可直接参考；
 5. 把库加进工程 = 工程里加 `.lib` + `INCLUDE_PATH` 加库的 `include\`（照 §3 路径），
    **不要改 TI 库源码**；本 skill 的构建脚本会按 `.cproject` 把工程里的 `.lib` 一起链进去。
+
+---
+
+## 8. 已知缺口：SVPWM / 三电平（2026-09-30 用本 skill 工具实测）
+
+| 想要 | C2000Ware Core SDK（`F:\c2000ware-core-sdk`，v26）| controlSUITE（`F:\controlSUITE`，老）|
+|---|---|---|
+| **两电平 SVPWM（svgen）** | ❌ **无**（`-Keyword svgen` 空；`-List libs` 只有 ai / calibration / communications / **DCL** / dsp / math）| ✅ **有**：`libs\app_libs\motor_control\math_blocks\{fixed_v1.1, v2.0~v4.3, CLA_v1.0}\` 下 `svgen_dq.h` / `svgen.h` / `svgen_dpwm.h` / `svgen_mf.h` / `SVGEN_CLA.h`（**纯 .h 宏实现，没有 .c**），每个都配 `~Docs\*.pdf` |
+| **三电平 SVPWM（NPC / TNPC / T 型）** | ❌ 无 | ❌ **无**（目录名 `3L/NPC/level` = 0 个；`development_kits\` 40+ 套件全是两电平；内容搜 `three-level/NPC/T-type` 只误命中 `httpd.c`）|
+
+**结论**：
+1. **TI 官方只提供两电平 SVPWM**（`SVGEN_DQ` 宏：`Ualpha/Ubeta` → 60° 扇区判断 → `Ta/Tb/Tc` 三路占空比）。
+2. **三电平（含 T 型 TNPC）TI 没给现成实现** —— 遇到时不要再去两套 SDK 里翻，直接自己实现。两条**等价**路径：
+   - **载波比较法**：调制波 + min-max 零序注入，与三角载波比较（本工程 `Emit_Wave\1-3SVPWM_YJB` 用的这个，实测三态互斥、和值 ≈1000、5Hz 正确）
+   - **矢量合成法**：大扇区 → 小扇区 → 矢量作用时间（学术/CSDN 常见，作用时间与①等价）
+3. **本机两套 SDK 都在**：`F:\c2000ware-core-sdk`（v26，新，含 device_support/driverlib/libraries）+ `F:\controlSUITE`（老，含 DMC 电机库 `libs\app_libs\motor_control\`）。
+4. 检索时**务必用本 skill 的 `scripts\c2000ware_find.ps1`**（它会自动定位 SDK 根并全库 grep）；**不要**自己写 `Get-ChildItem` —— 容易因 `-First N` 截断而得出假结论（本文件这条就是踩过两次坑后写的）。

@@ -59,6 +59,31 @@
 新增外设前先在这张表里挑空闲脚；用 `GPAMUX1/GPAMUX2/GPBMUX1/GPBMUX2.x = 0` 设为通用 IO，
 输出方向 `GPADIR/GPBDIR.x = 1`，输出电平用 `GPASET/GPACLEAR`（读回用 `GPADAT`）。
 
+### ⚠️ 发波模块占用 —— 会**整体覆盖**上表（2026-09-30 补记）
+
+`Emit_Wave` 下的发波模块把 **GPIO0~11 全部复用成 EPWM**（`Board_Gpio.c` 与各模块的 `vXxx_GpioConfig()`
+都写 `GPAMUX1.x = 1`），与上表的原有功能**直接冲突**：
+
+| GPIO | 上表原功能 | 1-3SVPWM_YJB（三电平 TNPC，12 路）|
+|---|---|---|
+| 0 / 1 | EPWM1A / 1B | A 相上臂 / 下臂 |
+| 2 / 3 | **步进电机** | B 相上臂 / 下臂 ⚠️ |
+| 4 / 5 | **步进电机** | C 相上臂 / 下臂 ⚠️ |
+| 6 | **蜂鸣器** | A 相中点臂管1（EPWM4A）⚠️ |
+| 7 | — | A 相中点臂管2（EPWM4B，与管1 同信号）|
+| 8 / 9 | **OLED SDA / SCL** | C 相中点臂管1 / B 相中点臂管2（EPWM5A/5B）⚠️ |
+| 10 / 11 | **LED** | C 相中点臂管2 / …（EPWM6A/6B）⚠️ |
+
+- **调用任何 `vSVPWM_YJB_*`（1-3）或 `vIPOD_*`（1-4）之后，上表这几项功能全部失效**；
+  跑三电平期间**不要**再调 `BEEP_*` / `OLED_*` / `LED_*` / 步进电机。
+- **跑两电平模块（1-1 SPWM / 1-2 SVPWM_MAB）时不碰 GPIO6~11**（只用 EPWM1~3）。
+  但 `Board_Gpio.c` 上电就把 **GPIO6 配成 EPWM4A**，而 EPWM4 模块闲置 → 引脚停在**静态低**
+  ⇒ **低电平触发**的蜂鸣器会**一直响**（高电平触发的不响）。
+  开环期间可纯软件解决：把 GPIO6 用 `GPAMUX1.GPIO6 = 0` 改回普通 GPIO 输出高即可，
+  切三电平时 `vYJB_GpioConfig()` 会**自动抢回 EPWM4A**，对三电平零影响。
+- ⚠️ **绝不能为了静音去调 `BEEP_Init()`**：它会把 GPIO6 从 EPWM4A 变回普通 GPIO 并拉低
+  ⇒ A 相中点臂 Q3/Q4 恒关、O 态消失、三电平降级成两电平、Q1/Q2 承受全母线电压（应力翻倍）。
+
 ## 新增模块的标准动作
 
 1. 建目录 `APP/<模块>/`，写 `<模块>.c` / `<模块>.h`（头文件用 `#ifndef X_H_` 保护，`#include "DSP2833x_Device.h"` + `"DSP2833x_Examples.h"`）。
