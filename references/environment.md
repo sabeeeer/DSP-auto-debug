@@ -65,8 +65,10 @@
    中文后紧跟的 `"` 会被当成双字节字符的一部分被"吃掉"，导致字符串未闭合、脚本整套语法崩掉
    （实测踩过：`Out2 "HINT2 : …跳过本检查"` 一个中文尾字即让脚本无法运行）。
    自检命令：`$errs=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$errs); $errs.Count`
-10. **工程目录里放"嵌套工程 / 完整例程"时，必须把该目录加入 `.cproject` 的 exclude from build**（2026-10-09 实测）：
-   场景：把 GitHub 上的某个完整例程整套拷进工程文件夹（例：`<工程>\1-1SVPWM_PODPWM\`）当"迁移存档"。
+10. **接入（迁移）别的工程：对比工程差异、只迁移差异程序 —— 不要把完整例程整包拷进工程目录**（2026-10-09 实测）：
+   首选：把源工程与目标工程**逐目录对比差异**（`APP/` / 库 / `User/` / `.cproject`），只迁移差异程序
+   （源码目录 + `main` 调用 + `.cproject` 的 include；TI 头文件的 include 改成工程内相对路径）。
+   若不慎把整包放进了工程目录（例：`<工程>\1-1SVPWM_PODPWM\`，当"存档"用），必须按下面的办法把该目录排除出构建：
    不排除的后果（CCS 按 `sourceEntries` 扫**整个工程目录**，嵌套工程也在内）：
    - 源码被重复纳入（同名源编译出两份 obj，如 `yjb_algo_yjb.obj` + `yjb_algo_1-1PODPWM_Product.obj`）；
    - 嵌套工程自带的 `User/main.c` 也被编译 → 缺它的 include 路径时报 `fatal error #1965: cannot open source file`；
