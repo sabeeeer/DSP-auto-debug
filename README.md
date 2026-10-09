@@ -1,5 +1,9 @@
 # DSP 自动调试（CodeBuddy Skill）
 
+> [!WARNING]
+> GitHub 不能恢复 CCS、编译器、探针、目标板、驱动和许可证。
+> 详见 [`IRREPLACEABLE.md`](IRREPLACEABLE.md)。
+
 > TI C2000 / DSP2833x 在 **CCS12 / CCS6** 上的全自动开发 + 调试闭环：
 > 写代码 → 自动编译链接自检（不用打开 CCS 界面）→ 自动下载进调试器运行 → 读回寄存器/变量 → 失败自动分类并给出原因。
 
