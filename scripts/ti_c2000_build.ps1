@@ -352,8 +352,12 @@ $n = $cproj.SelectSingleNode("//listOptionValue[contains(@value,'LINKER_COMMAND_
 if ($n) { $lnkCmd = ([string]$n.value) -replace '.*LINKER_COMMAND_FILE=', '' }
 $cmdFiles = @()
 if ($lnkCmd) {
+    # (2026-10-09) also skip "exclude from build" entries here: when the project folder keeps a
+    # nested project/example (excluded in .cproject), its same-named .cmd was found first, and the
+    # real one was appended afterwards -> two identical .cmd to the linker ->
+    # "error #10263/#10264: memory range has already been specified".
     $f = Get-ChildItem -Path $ProjectPath -Recurse -Filter $lnkCmd -ErrorAction SilentlyContinue |
-         Where-Object { $_.FullName -notmatch '\\Debug\\' } | Select-Object -First 1
+         Where-Object { $_.FullName -notmatch '\\Debug\\' -and -not (Test-Excluded $_.FullName) } | Select-Object -First 1
     if ($f) { $cmdFiles += $f.FullName }
 }
 $allCmd = @(Get-ChildItem -Path $ProjectPath -Recurse -Filter '*.cmd' -ErrorAction SilentlyContinue |

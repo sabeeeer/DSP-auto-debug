@@ -65,6 +65,20 @@
    中文后紧跟的 `"` 会被当成双字节字符的一部分被"吃掉"，导致字符串未闭合、脚本整套语法崩掉
    （实测踩过：`Out2 "HINT2 : …跳过本检查"` 一个中文尾字即让脚本无法运行）。
    自检命令：`$errs=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$errs); $errs.Count`
+10. **工程目录里放"嵌套工程 / 完整例程"时，必须把该目录加入 `.cproject` 的 exclude from build**（2026-10-09 实测）：
+   场景：把 GitHub 上的某个完整例程整套拷进工程文件夹（例：`<工程>\1-1SVPWM_PODPWM\`）当"迁移存档"。
+   不排除的后果（CCS 按 `sourceEntries` 扫**整个工程目录**，嵌套工程也在内）：
+   - 源码被重复纳入（同名源编译出两份 obj，如 `yjb_algo_yjb.obj` + `yjb_algo_1-1PODPWM_Product.obj`）；
+   - 嵌套工程自带的 `User/main.c` 也被编译 → 缺它的 include 路径时报 `fatal error #1965: cannot open source file`；
+   - 它自带的 `28335_RAM_lnk.cmd` / `DSP2833x_Headers_nonBIOS.cmd` 与本工程同名文件**双双进链接器**
+     → `error #10263: ... memory range has already been specified` + `#10264: ... overlaps existing memory range`；
+   - 编译阶段可能全绿，只有链接才炸，容易误判成"代码写错"。
+   解法：`.cproject` → `<sourceEntries><entry excluding="28335_RAM_lnk.cmd|1-1SVPWM_PODPWM" .../>`
+   （多个条目用 `|` 分隔；带尾 `/` 表示整个文件夹）。该目录此后只作"文件夹里的存档"，不参与本工程构建；
+   要用它时单独 Import 它自己的工程文件（它是独立工程，不受本工程 exclude 影响）。
+   **脚本侧同步修复**（`ti_c2000_build.ps1`，2026-10-09）：解析 `LINKER_COMMAND_FILE=<名字>` 的第一步搜索
+   原先只跳过 `\Debug\`，会先命中嵌套工程里那份同名 `.cmd`（目录名排序在前），随后本工程真正那份又被追加
+   → 两份同名 `.cmd` 进链接器。现已在第一步也套用 `Test-Excluded`，与源码/`.lib` 的过滤口径保持一致。
 
 ## 补充：本机 TI 资源位置（2026-09-30 实测）
 
