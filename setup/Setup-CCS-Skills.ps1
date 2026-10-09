@@ -56,9 +56,19 @@ if (-not $PSBoundParameters.ContainsKey('SkillsRoot')) {
 $doHooks = (-not $NoHooks) -and ($Target.ToLower() -eq 'codebuddy')
 function Step($m) { Write-Output ("== " + $m) }
 function Note($m) { Write-Output ("   " + $m) }
+$script:stepFailures = 0
 function Apply-Step($m, [scriptblock]$action) {
     if ($DryRun) { Write-Output ("   [dry-run] " + $m) ; return }
-    try { & $action; Write-Output ("   [ok] " + $m) } catch { Write-Output ("   [FAILED] " + $m + " -> " + $_.Exception.Message) }
+    try {
+        $oldEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Stop'
+        try { & $action } finally { $ErrorActionPreference = $oldEap }
+        Write-Output ("   [ok] " + $m)
+    }
+    catch {
+        $script:stepFailures++
+        Write-Output ("   [FAILED] " + $m + " -> " + $_.Exception.Message)
+    }
 }
 
 Step "planned actions"
@@ -208,5 +218,9 @@ Write-Output "================ MANUAL STEPS (cannot be automated) ==============
     ("7. Restart the " + $Target + " session so the new skill is picked up" + $(if ($doHooks) { " (+ hooks)" } else { "" }) + ".")
 ) | ForEach-Object { Write-Output $_ }
 Write-Output "===================================================================="
+if ($script:stepFailures -gt 0) {
+    Write-Output ("RESULT: FAIL (" + $script:stepFailures + " step(s) failed)")
+    exit 1
+}
 Write-Output "RESULT: OK"
 exit 0

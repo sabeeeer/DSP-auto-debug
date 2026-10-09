@@ -1,0 +1,10 @@
+# Environment notes intentionally record one real machine's observed paths.
+# They are examples, not runtime dependencies.
+^references/environment\.md$
+^references/c2000ware-guide\.md$
+^scripts/c2000ware_find\.ps1$
+^scripts/check_ram_layout\.ps1$
+^scripts/ti_c2000_build\.ps1$
+^scripts/ti_c2000_debug\.ps1$
+^scripts/ti_c2000_set_probe\.ps1$
+^setup/Setup-CCS-Skills\.ps1$

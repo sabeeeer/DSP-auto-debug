@@ -88,6 +88,14 @@ powershell ... -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 
 
 判定只看输出里的 `RESULT: OK` / `RESULT: FAIL`。
 
+安装器和仓库自检：
+
+```powershell
+pwsh -NoProfile -File .\tests\test_setup_failure.ps1
+```
+
+该测试要求安装失败时输出 `RESULT: FAIL` 并返回非 0。
+
 ## 6. 常用参数
 
 | 参数 | 作用 |

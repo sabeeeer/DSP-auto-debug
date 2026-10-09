@@ -120,6 +120,11 @@ if (Test-Path (Join-Path $ProjectPath '.project')) {
         if ($prj.projectDescription.name) { $projName = $prj.projectDescription.name }
     } catch { }
 }
+# .project is untrusted input. Strip any path separators / traversal fragments before
+# using the name in temp paths or recursive cleanup operations.
+$projName = [IO.Path]::GetFileName([string]$projName)
+$projName = [regex]::Replace($projName, '[^A-Za-z0-9._-]+', '_').Trim('.', '_')
+if ([string]::IsNullOrWhiteSpace($projName)) { $projName = 'project' }
 # ---- pick the build configuration whose options are used ----
 # A .cproject may declare several configurations (Debug / Release / F2837xD_CPU1 ...) plus a
 # <refreshScope> block that also contains <configuration> nodes but has no @id - those must not
