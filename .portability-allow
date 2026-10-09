@@ -8,3 +8,4 @@
 ^scripts/ti_c2000_debug\.ps1$
 ^scripts/ti_c2000_set_probe\.ps1$
 ^setup/Setup-CCS-Skills\.ps1$
+^tools/
