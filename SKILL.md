@@ -1,6 +1,6 @@
 ---
 name: ti-c2000-ccs-auto
-description: TI C2000 全系（DSP2833x/F2823x、F2802x/03x/05x、F2806x、F2837xD/F2837xS、F2807x、F2838x、F28004x/F28003x、F28M35x、F29H85x 等）在 CCS12/CCS6 上的全自动开发+调试闭环（已在 DSP28335 实测）：自动按工程约定写外设驱动代码 → 用 cl2000 自动编译+链接自检（不必打开 CCS 界面，编译选项/器件/运行库/链接脚本全部从 .cproject 反推）→ 自动下载进调试器运行并读回变量与寄存器，把编译报错、未定义符号、下载失败挡在交付之前。仿真器覆盖 XDS100/110/200/510/560、Spectrum Digital、Blackhawk、SEGGER J-Link 及 TI 模拟器。使用时机(满足任一即用)：① 用户要求"DSP写程序/写代码/改代码/加功能/写驱动"；② 对话出现"调试/debug/下载/烧录/进调试器/跑一下/验证"等调试意图；③ 读写或打开 DSP 头文件与工程文件（DSP2833x_Device.h、DSP2833x_Examples.h、F28xx_Device.h、driverlib.h、.cproject、F28335/28335/2833x/F2837/F2806 的 APP/ 模块）。触发词：TI C2000、TIC2000、C2000、DSP28335、F28335、28335、2833x、F28027、F28069、F28379D、F28377D、F280049、F28388D、DSP开发、DSP程序、DSP工程、CCS、CCS12、CCS6、Code Composer Studio、ccstudio、进调试器、自动调试、自动编译、一键编译、编译验证、下载程序、烧录、运行程序、loadti、DSS、Debug Server Scripting、ccxml、targetConfigs、C2000Ware、controlSUITE、cmd链接脚本、XDS100、XDS110、XDS200、XDS560、XDS510、Spectrum Digital、Blackhawk、SEGGER、J-Link、TI模拟器、tisim、仿真器、JTAG、双核、CPU1、CLA、driverlib、SysConfig、cl2000、gmake、.out文件、EPWM、PWM波、SCI、串口、ADC、DMA、GPIO、外部中断、定时器、看门狗、寄存器、编译不过、链接错误、未定义符号、报错排查。
+description: TI C2000 全系在 CCS12/CCS6 上的全自动开发与调试闭环，已在 DSP28335、F28379D + XDS100v2 实测。适用于 DSP/CCS/C2000 代码、编译、链接、下载、烧录、运行、寄存器读回和故障排查；覆盖 F28335、F28379D、F28377D、F2806x、F2838x、XDS100/110/200、JTAG、EPWM、SCI、ADC、DMA、GPIO、driverlib、SysConfig、双核和 CPU1。
 ---
 
 # TI C2000 / DSP2833x 全自动开发 + 调试（CCS12 / CCS6）
@@ -201,6 +201,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | 需求 | 参数 |
 |---|---|
 | 换仿真器 / 换板 | 在 CCS 里改 target configuration，然后 `-Ccxml <文件>`（默认取 `targetConfigs\` 下第一个） |
+| F28379D + XDS100v2 | 使用 `f28379d.xml`、CPU1 port `0x10`；序列号必须按 `xds100serial` 实际输出填写；见 `references/other-devices-and-probes.md` §3.2 |
 | 换探针型号（XDS100v1/v2/v3、XDS110...） | `scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2`（`-List` 列本机可选项、`-DryRun` 只报告、自动备份 .bak）；一次改齐 ccxml + .ccsproject |
 | 双核 / 多核器件（F2837xD/F28379D/F2838x） | `-CorePattern ".*CPU1.*"` 选核；每个核各自一份 `.ccxml` 与 `.out` |
 | 用模拟器（无硬件） | ccxml 选 tisim，脚本自动跳过硬件检查；也可 `-NoProbeCheck` |
@@ -212,7 +213,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 C2000Ware 里 cmd 怎么选、2837x/28379x 的 bitfield/driverlib 骨架、SysConfig 与库用法：
 见 [references/c2000ware-guide.md](references/c2000ware-guide.md)。
 
-> 诚实边界：本 skill 只在 **DSP28335 + XDS100 + CCS12.8/CCS6** 上做过硬件实测；其他型号/仿真器按 TI 通用结构自动适配，
+> 诚实边界：本 skill 已在 **DSP28335 + XDS100v2** 和 **F28379D + XDS100v2** 上做过硬件实测；其他型号/仿真器按 TI 通用结构自动适配，
 > 第一次用请先跑 `ti_c2000_build.ps1` 自检，再上 `ti_c2000_debug.ps1`。
 
 ## 失败分类（照实说失败，并给出分类+原因）

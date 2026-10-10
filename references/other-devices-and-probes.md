@@ -1,7 +1,7 @@
 # 其他 C2000 型号 与 其他仿真器
 
 > 本文件说明本 skill 的**通用程度**：哪些是自动适配的、哪些必须手动给参数。
-> 已在 **DSP28335 + XDS100 + CCS12.8/CCS6** 上实测；下表其他型号的差异点来自 TI 官方结构惯例，**换型号首次使用请先跑一次编译自检再做调试**。
+> 已在 **DSP28335 + XDS100v2** 和 **F28379D + XDS100v2** 上实测；下表其他型号的差异点来自 TI 官方结构惯例，**换型号首次使用请先跑一次编译自检再做调试**。
 
 ## 1. 自动适配的部分（换型号通常不用改脚本）
 
@@ -103,6 +103,61 @@ ccxml 决定用哪种连接，`.ccsproject` 是工程级记录。改完跑 `ti_c
 **改对了仍报 `-151/-1135` 才去查硬件**：拔插探针 USB（错误里的 "reset the debug probe"；正常会枚举
 **3 个设备**：`XDS100 Class USB Serial Port (COMx)` + `Debug Port` + `Auxiliary Port`，少了串口那路就是异常）
 → 查 JTAG 排线/板子供电 → 再怀疑 CCS 调试会话占用、USB 线/探针硬件。
+
+### 3.2 F28379D + XDS100v2 本机实测（2026-10-10）
+
+本机最终成功组合：
+
+```text
+CCS12.8.1
+Board:  TMS320F28379D
+Probe:  XDS100v2
+Serial: TI90I42A
+Target: f28379d.xml
+CPU1:   Subpath_0 / Port Number 0x10
+```
+
+`xds100serial.exe` 的实际输出是唯一可信串号来源。即使 Windows
+`DeviceID` 末尾还可能多一个字符，也应以 `xds100serial` 打印值为准。
+本次 PnP DeviceID 为 `...TI90I42AB...`，但 CCS 能连接的串号是
+`TI90I42A`。
+
+正确的 `Emulator Selection` 写法：
+
+```xml
+<property Type="choicelist" Value="1" id="Emulator Selection">
+    <choice Name="Select by serial number" value="0">
+        <property Type="stringfield" Value="TI90I42A" id="-- Enter the serial number"/>
+    </choice>
+</property>
+```
+
+注意：
+
+- 不要沿用官方 28377D 例程自带的 `TMS320F28377D.ccxml`；本次实测会报
+  `IcePick_C_0 Error -1265: Device ID is not recognized`。
+- `f28379d.xml` 的 CPU1 默认端口是 `Subpath_0 / 0x10`，不是 28377D
+  里的 `Subpath_1 / 0x11`。
+- 串号字段只改数值不够；字段结构必须用上面的 `Value="1"` +
+  `id="-- Enter the serial number"`。字段名写成 `SEPK.POD_SERIAL`
+  时本次实测报 `Error -151`。
+- 默认 1 MHz TCLK 可在本机 F28379D 上工作；`Error -2131` 时先确认目标
+  上电/复位状态，再确认 serial 是否真的匹配，不要只盲目降 TCLK。
+
+成功时 `loadti` 输出包含：
+
+```text
+Connecting to target...
+C28xx_CPU1: GEL Output:
+Memory Map Initialization Complete
+Loading ...blinky_cpu01.out
+Done
+Target running...
+RESULT: OK
+```
+
+本次用该组合连续下载运行 12 个官方 bitfield 例程（GPIO/Timer/EPWM/
+ADC/SCI/SPI/watchdog/eCAP 等），全部 `RESULT: OK`。
 
 ## 4. 双核 / 多核器件怎么办
 
