@@ -281,6 +281,7 @@ foreach ($p in $rawInc) {
     $q = ([string]$p).Trim('"')
     $q = $q.Replace('${workspace_loc:/${ProjName}}', $ProjectPath)
     $q = $q.Replace('${workspace_loc:/${ProjName}/', ($ProjectPath + '\'))
+    $q = $q.Replace('${PROJECT_ROOT}', $ProjectPath)
     $q = $q.Replace('${ProjName}', $projName)
     $q = $q.Replace('${CG_TOOL_ROOT}', $cgRoot)
     $q = $q -replace '/', '\'
@@ -411,7 +412,7 @@ if ($libExcluded.Count -gt 0) {
 # (APP / User / DSP2833x_Libraries) any other top-level folder counts as well - a module
 # may legitimately live next to APP/ (e.g. <project>\OpenLoop\).  Known non-source dirs
 # are skipped.
-$srcRoots = @()
+$srcRoots = @($ProjectPath)
 foreach ($sub in @('APP', 'User', 'DSP2833x_Libraries')) {
     $p = Join-Path $ProjectPath $sub
     if (Test-Path $p) { $srcRoots += $p }
@@ -423,9 +424,9 @@ foreach ($d in @(Get-ChildItem -Path $ProjectPath -Directory -ErrorAction Silent
         $srcRoots += $d.FullName
     }
 }
-if ($srcRoots.Count -eq 0) { $srcRoots = @($ProjectPath) }
 $srcAll = @(Get-ChildItem -Path $srcRoots -Recurse -File -Include '*.c', '*.asm' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '\\Debug\\' -and $_.FullName -notmatch '\\auto_build\\' })
+            Where-Object { $_.FullName -notmatch '\\Debug\\' -and $_.FullName -notmatch '\\auto_build\\' } |
+            Sort-Object FullName -Unique)
 $srcExcluded = @($srcAll | Where-Object { Test-Excluded $_.FullName })
 $cfiles = @($srcAll | Where-Object { -not (Test-Excluded $_.FullName) } | ForEach-Object { $_.FullName })
 if ($cfiles.Count -eq 0) { Fail "no C/ASM sources found under: $($srcRoots -join ', ')" 2 'NO_SOURCES' }
@@ -542,6 +543,7 @@ if ($compileErrors.Count -eq 0) {
         $q = ([string]$p).Trim('"')
         $q = $q.Replace('${workspace_loc:/${ProjName}}', $ProjectPath)
         $q = $q.Replace('${workspace_loc:/${ProjName}/', ($ProjectPath + '\'))
+        $q = $q.Replace('${PROJECT_ROOT}', $ProjectPath)
         $q = $q.Replace('${ProjName}', $projName)
         $q = $q.Replace('${CG_TOOL_ROOT}', $cgRoot)
         $q = $q -replace '/', '\'
