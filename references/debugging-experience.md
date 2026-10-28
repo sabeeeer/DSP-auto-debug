@@ -15,7 +15,7 @@
 | DSP28335 / F28379D 等，按各文适用范围 | JTAG / DSS / 读回 | 下载失败、就绪条件、读得太早、长时等待 | [DSS 调试](dss-debug.md)；[器件与探针记录](other-devices-and-probes.md) |
 | 具体工程与工具链，按原文适用范围 | 构建 / 链接 / 自动化 | 旧 `.out`、失败分类、RAM/Flash 段 | [现场手册](field-guide.md)；[RAM 与链接](ram-and-linker.md) |
 
-上表是旧资料的入口，**不表示每条旧结论已在所有列出的器件上验证**。尤其不要把 DSP28335 的 ADC、SPI、SCI 寄存器行为直接套到 F28379D。当前没有专门的 eCAP 故障结论；出现实测问题时先查当前器件例程，再按下面规则建立案例。
+上表是旧资料的入口，**不表示每条旧结论已在所有列出的器件上验证**。尤其不要把 DSP28335 的 ADC、SPI、SCI 寄存器行为直接套到 F28379D。eCAP 的当前板实测故障见下表；先查当前器件例程，再按下面规则建立案例。
 
 ## 新案例索引
 
@@ -26,7 +26,12 @@
 | DSP28335 | SPI / 外部 DAC（TLV5620） | LOAD 拉早、残字锁存、码值翻倍/串道、DAC 假损坏、`BUFFULL_FLAG`/`INT_FLAG`、`SPIRXBUF`、FIFO 不适用、`SPIBRR` | 已回归 | [2026-10-26-tlv5620-load-timing](debug-cases/dsp28335/2026-10-26-tlv5620-load-timing.md) |
 | DSP28335 | SCI / 共享数据 | 波形垂直毛刺、帧错位、原子快照、`DINT` | 排查中 | [2026-10-26-sci-shared-data-tearing](debug-cases/dsp28335/2026-10-26-sci-shared-data-tearing.md) |
 | DSP28335 | ADC / 接线判据 | 悬空引脚读数稳定、误判通道损坏、历史 `0.95V` 读数 | 待复核 | [2026-10-27-adc-floating-misjudge](debug-cases/dsp28335/2026-10-27-adc-floating-misjudge.md) |
-| DSP28335 | SolarLib SPLL | sine 型输入的 d/q、硬编码 B0/B1、半拍补偿 | PC 已验证；上板待验证 | [2026-10-27-solarlib-spll-integration](debug-cases/dsp28335/2026-10-27-solarlib-spll-integration.md) |
+| DSP28335 | SolarLib SPLL / 三相 SOGI | sine 型输入的 d/q、硬编码 B0/B1、半拍补偿、DSOGI 正负序分离、不平衡下 vq 纹波 0.262→0.001 pu | 已回归 | [2026-10-27-solarlib-spll-integration](debug-cases/dsp28335/2026-10-27-solarlib-spll-integration.md) |
+| DSP28335 | CCS / SDK 例程构建 | eCAP、`INSTALLROOT_*`、linked resources、通用构建脚本失败 | 已回归（构建适配） | [2026-10-27-sdk-example-build-macros](debug-cases/dsp28335/2026-10-27-sdk-example-build-macros.md) |
+| DSP28335 / XDS100v1 | JTAG / DSS 自动化 | PowerShell 调用 `.bat` 失败、CIM 误报无探针、`xds100serial` | 已回归 | [2026-10-28-dss-batch-probe-preflight](debug-cases/dsp28335/2026-10-28-dss-batch-probe-preflight.md) |
+| DSP28335 | eCAP / GPIO 连通性 | GPIO4 翻转、GPIO24 恒高、eCAP 捕获计数为零、跳线 | 排查中 | [2026-10-28-ecap-gpio24-no-edge](debug-cases/dsp28335/2026-10-28-ecap-gpio24-no-edge.md) |
+| DSP28335 / CCS 12.8 DSS | FPU / 浮点读回 | `expression.evaluate` 截断、浮点显示整数、原始位型、误判超时 | 已回归（读回方法） | [2026-10-28-fpu-dss-float-readback](debug-cases/dsp28335/2026-10-28-fpu-dss-float-readback.md) |
+| DSP28335 / 本机 SDK | FPU software / 工程选项 | 源码写软件浮点、`.cproject` 仍启用 `fpu32`、错误验收 | 待复核 | [2026-10-28-fpu-software-project-options](debug-cases/dsp28335/2026-10-28-fpu-software-project-options.md) |
 
 新案例按[案例模板](debug-cases/CASE-TEMPLATE.md)记录，原始日志/波形优先保存在对应工程或用户指定位置，案例中写稳定路径与关键读数，避免把大量原始数据复制进技能。
 
@@ -36,4 +41,4 @@
 2. 案例写清器件/板卡/目标核、模块、环境、现象、复现条件、原始证据、排查过程、原因或假设、修复与回归结果。用“排查中 / 待复核 / 已定位 / 已回归 / 已证伪”标状态；PC 数值验证与目标板回归分别写明。把实测事实与推测分开；缺失的参数写“未知”，不要补造。
 3. 登记上面的新案例索引，状态和文件一致。运行 `pwsh -NoProfile -File "<skill>\scripts\check_debug_catalog.ps1" -SkillRoot "<skill>"`，确认每个案例都入索引、每条案例链接都存在。交付时告知用户新增或更新的案例；无法写入技能时，把证据和待归档事项明确交给用户。
 
-**结论晋级门槛**：标“已定位”须有能区分竞争原因的原始读数/抓包/波形及对应源码版本；标“已回归”还须有修复前后同条件结果、实际构建标识和目标板运行记录。工程注释、旧 `.out`、口述截图、PC 仿真各自只能支持其实际覆盖范围。算法或外设建议与旧案例冲突时，先核对当前器件 TI 手册和真实寄存器配置，修正冲突后再归档。目录检查脚本只校验收录与链接，**不校验技术结论是否正确**。
+**结论晋级门槛**：标“已定位”须有能区分竞争原因的原始读数/抓包/波形及对应源码版本；标“已回归”还须有修复前后同条件结果、实际构建标识和目标板运行记录。工程注释、旧 `.out`、口述截图、PC 仿真各自只能支持其实际覆盖范围。算法或外设建议与旧案例冲突时，先核对当前器件 TI 手册和真实寄存器配置，修正冲突后再归档。目录检查脚本只校验收录、链接与状态一致性，**不校验技术结论是否正确**。

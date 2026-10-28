@@ -1,0 +1,54 @@
+# SolarLib SPLL 适配层：PC 数值验证与待上板事项
+
+## 身份与状态
+
+- 器件目标：TMS320F28335，计划 10 kHz 控制；SolarLib v1.2 float 版 `SPLL_3PH_SRF_F`、`SPLL_1PH_SOGI_F` 与 `ABC_DQ0_POS_F`。
+- 工程：`E:\1.My_CCS_DSP28335\0-0ai_test_project\2-1SOGI_PLL`；PC 测试：`E:\1.My_CCS_DSP28335\0-0ai_test_project\2-1SOGI_PLL_verify\test_ti_pll.c`。
+- 状态：**已回归**（2026-10-28 上板，见文末「目标板回归」；PC 数值结论保留在下文）。
+- 上板配置：CCS 12.8.1 / ti-cgt-c2000_22.6.1.LTS / XDS100v1 / RAM 调试，72 源文件 0 warning，`RESULT: OK`。
+
+## 已核对的事实
+
+- `Library/solarlib/{include,source}` 和 `Library/solarlib_adapter.{c,h}` 存在，`.cproject` 含 SolarLib include 路径。适配层覆盖 `SPLL_3ph_SRF_F_init` 中固定的 `B0/B1`；原源码注释写 20 kHz，实际常数为 166.9743/-166.266，使用前应按所需环路带宽和实际采样周期核算。
+- 对本工程的 **sine 型**三相输入 `va=sin θv, vb=sin(θv−2π/3), vc=sin(θv+2π/3)`，`ABC_DQ0_POS_F` 给出 `d=V sin(θv−θ)`、`q=−V cos(θv−θ)`；本适配层把 `abc.d` 送入 SPLL 结构体的 `v_q[0]`，是当前相位定义下的误差选择。**换成 cosine 型三相输入时 d/q 的意义会改变，不能通用地说“d 才是误差”。** 应先推导/测量相位与反馈符号，并检查闭环是负反馈。
+- 2026-10-27 在审查工作区以 GCC 编译同一测试、PLL/适配层及 SolarLib 源码并运行：三相平衡 50 Hz、10 kHz、稳态第 5000–6000 拍，`PLL_Update3_TI` 平均相位误差 **0.0022°**、最大 **0.0034°**、频率 50.000 Hz；自研 `PLL_Update3` 平均 **0.9022°**。单相 `PLL_Update1_TI` 平均 **1.7960°**。这些是**合成正弦的 PC 仿真**，未覆盖 ADC、时序、噪声、异常电网或目标板性能。
+- 当前主程序的 `GRID_Sudden_Config(..., 5.0f, ...)` 是 5 Hz 示波观察模式，而上述 PC 测试是 50 Hz；还须单独验证 5 Hz 时以 50 Hz 标称初始化的 PLL 能否捕获与稳定跟踪。
+- 适配层在 Park 角度加入 `0.5·ω·Ts`；测试输出表明整层数值结果符合此特定合成场景。原记录的“TI 原版 1.802° → 0.002°”未在本次独立运行中复现原版基线，先保留为历史报告值，不作已复核结论。
+- 原记录另称曾出现 `Solar_F.h` include 错误、CCS 编译 75 个源文件且 0 error、单相 SOGI 的 `theta` 越界归零及系数更新问题。这些记录对应的构建日志与板上运行证据未找到；涉及 SOGI 行为时先查实际库源码，不把历史口述当作目标板验证。
+
+## 待验证和边界
+
+1. 当前适配层只按 `fs_hz > 15000` 在 **10 kHz 与 20 kHz 两组固定系数**之间切换，不能视为任意采样率通用实现；改频率要按环路设计重新计算并测试。
+2. 确认 CCS 对当前构建配置确实编译和链接了所需 SolarLib 源文件，保存构建日志和固件标识。仅有旧 `.out` 不证明这次构建成功。
+3. 用当前已接入 TI 版的主程序，以 ADC 输入、真实采样率、串口/示波器及板上读回验证 5 Hz 观察模式和 50 Hz 正常模式的锁相、频率、相序、符号和失锁恢复，再更新为“已回归”。
+
+## 目标板回归（2026-10-28，含新增 DSOGI）
+
+**新增模块**：`PLL/dsogi_pll.c`（`PLL_SOGI_Init` / `PLL_Update3_SOGI`），三相 SOGI 锁相。TI 库复用与自写边界：
+
+| 部分 | 来源 |
+|---|---|
+| SOGI 离散系数 | TI `SPLL_1ph_SOGI_F_init` / `SPLL_1ph_SOGI_F_coeff_update`（k 固定 0.5） |
+| SOGI 递推 | 照抄 `SPLL_1ph_SOGI_F_MACRO` 前 8 行（含移位顺序） |
+| 环路 PI + VCO | TI `SPLL_3ph_SRF_F_init` / `SPLL_3ph_SRF_F_FUNC` |
+| Clarke / PNSC / 半拍补偿 / ω 自适应 | 自写（TI 无三相 SOGI 模块） |
+
+**上板读数**（10 kHz，ADC 回采闭环，`g_vq_*` 为 2000 拍峰峰，带 30000 偏置）：
+
+| 场景 | 指标 | DSOGI（新） | TI SRF（`PLL_Update3`） |
+|---|---|---|---|
+| 1-1-1 平衡 | vq 峰峰 | **0.001 pu**（1 码） | 0.170 pu |
+| 1-1-1 平衡 | 频率读数 | 49.97 Hz | — |
+| 1-1-3 三相不平衡 | vq 峰峰 | **0.001 pu** | **0.262 pu** |
+| 1-1-3 三相不平衡 | 频率读数 | **50.01 Hz** | **51.24 Hz**（被 100 Hz 纹波带偏） |
+
+- 两套 PLL 在同一 ISR 内同时跑，输入同为 ADC 回采；不平衡场景 DSOGI 把 vq 纹波压掉约 **260 倍**，频率不再抖动——与 DSOGI 的工作原理一致。
+- 平衡场景 SRF 的 0.170 pu 峰峰属**未滤波的鉴相误差**（含 ADC/模拟链路噪声），不代表锁相精度；θ 由环路平均后仍然平稳。
+- 相位：PLL 输出比电网参考滞后 SRF **1.49°** / DSOGI **1.89°**（含 PLL 内部 0.5 拍补偿），逆变器侧 `INV_LEAD_DEG` 取 1.9° 后 DACD 与 DACA 重合到 0.2° 内。
+- 耗时：`g_isr_dur` 12214 计数 = **81.0 µs**（DSOGI + SRF 同时跑），只跑 DSOGI 时约 78 µs；四路 DAC 写入仍占大头。
+
+**边界**：只测了 1-1-1 与 1-1-3 两个场景的真实 ADC 闭环；5 Hz 示波观察模式、频率阶跃（1-1-2）、谐波（1-1-4）、失锁恢复未测；vq 峰峰统计窗口固定 0.2 s（10 个工频周期）。
+
+---
+
+第二类算法资料见 `references/solarlib-catalog.md` 与 `references/spll-pll-algorithms.md`；本案例属于第三类的**本工程验证记录**，不代替全库目录。
