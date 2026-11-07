@@ -19,16 +19,18 @@
 
 .USAGE
     pwsh -NoProfile -ExecutionPolicy Bypass -File ti_c2000_set_probe.ps1 -ProjectPath <工程>            # 只看当前配置
-    powershell ... -File ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2                                  # 切成 XDS100v2
-    powershell ... -File ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v3 -DryRun                          # 只报告不写
-    powershell ... -File ti_c2000_set_probe.ps1 -List                                                          # 列出本机可选连接
+    pwsh ... -File ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2 -Serial <当前探针串号>             # 切成 XDS100v2
+    pwsh ... -File ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v3 -Serial <当前探针串号> -DryRun   # 只报告不写
+    pwsh ... -File ti_c2000_set_probe.ps1 -List                                                          # 列出本机可选连接
 
-    判定：末尾 RESULT: OK / RESULT: FAIL。改完建议再跑一次 ti_c2000_debug.ps1 -Run 确认能连。
+    若原 ccxml 按串号选探针，切换时必须显式提供当前实物的 -Serial；不静默清除或沿用旧串号。
+    判定：末尾 RESULT: OK / RESULT: FAIL。改完先只读检查连接配置；不要用 -Run 仅测试探针。
 #>
 [CmdletBinding()]
 param(
     [string] $ProjectPath = '',
     [string] $Probe       = '',
+    [string] $Serial      = '',
     [switch] $List,
     [string] $CcsRoot     = '',
     [switch] $DryRun
@@ -130,6 +132,12 @@ if ($ccxmls.Count -eq 0) { Fail 'NO_CCXML' "工程里没有 targetConfigs\*.ccxm
 $ccxml = $ccxmls[0]
 
 $ccxmlTxt = [System.IO.File]::ReadAllText($ccxml.FullName)
+$usesSerial = $ccxmlTxt -match 'id="Emulator Selection"[\s\S]*?id="-- Enter the serial number"'
+$currentSerial = ''
+if ($ccxmlTxt -match '<property[^>]*Value="([^"]*)"[^>]*id="-- Enter the serial number"') { $currentSerial = $Matches[1] }
+if ($Serial -and $Serial -notmatch '^[A-Za-z0-9_-]+$') {
+    Fail 'INVALID_SERIAL' '探针串号仅允许字母、数字、下划线和连字符；请核对 xds100serial 输出'
+}
 $curFile = ''
 if ($ccxmlTxt -match 'connections/([^"]+\.xml)') { $curFile = $Matches[1] }
 $cur = $allConn | Where-Object { $_.File -eq $curFile } | Select-Object -First 1
@@ -150,11 +158,14 @@ $target = Resolve-ConnectionFile $Probe
 if (-not $target) { Fail 'BAD_PROBE' ("targetdb 里找不到与 '{0}' 匹配的连接定义；用 -List 看可选列表" -f $Probe) }
 Say ("NEW       : {0}   [{1}]" -f $target.Desc, $target.File)
 
-if ($curFile -eq $target.File) {
+if ($curFile -eq $target.File -and (-not $Serial -or $Serial -eq $currentSerial)) {
     Say ''
     Say '已经是目标连接类型，无需修改。'
     Say 'RESULT: OK'
     exit 0
+}
+if ($usesSerial -and -not $Serial) {
+    Fail 'SERIAL_REQUIRED' '原 ccxml 按串号选探针；请先读取当前实物串号，并用 -Serial 显式传入，避免清掉或沿用旧串号'
 }
 
 # ---------- 5. 找配套的 C28x 驱动 xml ----------
@@ -194,6 +205,7 @@ $newXml = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' + $nl +
 ('        <instance XML_version="1.2" desc="{0}" href="connections/{1}" id="{2}" xml="{1}" xmlpath="connections"/>' -f $target.Desc, $target.File, $target.Id) + $nl +
 ('        <connection XML_version="1.2" id="{0}">' -f $target.Id) + $nl +
 ('            <instance XML_version="1.2" href="drivers/{0}" id="drivers" xml="{0}" xmlpath="drivers"/>' -f $drvName) + $nl +
+$(if ($Serial) { '            <property Type="choicelist" Value="1" id="Emulator Selection">' + $nl + '                <choice Name="Select by serial number" value="0">' + $nl + ('                    <property Type="stringfield" Value="{0}" id="-- Enter the serial number"/>' -f $Serial) + $nl + '                </choice>' + $nl + '            </property>' + $nl } else { '' }) +
 '            <platform XML_version="1.2" id="platform_0">' + $nl +
 ('                ' + $devLine) + $nl +
 '            </platform>' + $nl +
@@ -232,6 +244,6 @@ if (Test-Path $ccsproj) {
 }
 
 Say ''
-Say '提示：跑一次 ti_c2000_debug.ps1 -Run 确认连接正常（应打印 TARGET: ... 与你的探针一致）。'
+Say '提示：先核对 ccxml 中探针类型和串号；只读连接检查不应调用 -Run 下载程序。'
 Say 'RESULT: OK'
 exit 0

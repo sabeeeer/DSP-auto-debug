@@ -209,7 +209,7 @@ driverlib 的 API 内部已 `EALLOW/EDIS`，但**直接写寄存器的部分仍�
 
 - **XDS 驱动不在 C2000Ware 里**：`utilities\windows_drivers\` 只有 C2000 自身 USB 外设的驱动
   （`usb_dev_serial.inf` 等，VID_1CBE），**XDS100/110/200/560 驱动随 CCS 安装**；
-- 连接配置在工程 `targetConfigs\*.ccxml`，改探针型号/机型用 `scripts\ti_c2000_set_probe.ps1 -Probe v1|v2|v3|xds110`
+- 连接配置在工程 `targetConfigs\*.ccxml`，改探针型号/机型用 `scripts\ti_c2000_set_probe.ps1 -Probe v1|v2|v3|xds110 -Serial <当前探针串号>`；若原配置按串号选择，缺少 `-Serial` 会拒绝切换。
   （一次改齐 ccxml + `.ccsproject`，详见 `references/other-devices-and-probes.md` §3）；
 - 板子自带 USB CDC/DFU 的器件（F2806x 等）：DFU 烧写工具在 `utilities\tools\f2806x\dfuprog\`。
 

@@ -77,8 +77,8 @@
 # 看当前是什么
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程>
 # 切成 XDS100v2 / v1 / v3 / XDS110 ...
-... ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2
-... ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v3 -DryRun   # 只报告不写
+... ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2 -Serial <当前探针串号>
+... ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v3 -Serial <当前探针串号> -DryRun   # 只报告不写
 ... ti_c2000_set_probe.ps1 -List                                   # 列出本机所有可选连接
 ```
 
@@ -121,7 +121,7 @@ ccxml 决定用哪种连接，`.ccsproject` 是工程级记录。改完跑 `ti_c
   ```
 - 判据：改完 `TARGET:` 行不变（仍是同版本探针），但连接立刻成功（`VAR ... RESULT: OK`）。
 - **顺序很重要**：`-151` 按「① 按串号指定探针 → ② 换 USB 线/口 → ③ 查供电 → ④ 查驱动」
-  走，别一上来就怀疑线缆。`ti_c2000_set_probe.ps1` 只改版本（两处），**不会**帮你按串号指定。
+  走，同时检查供电与线缆。`ti_c2000_set_probe.ps1` 可用 `-Serial <当前串号>` 写入串号选择；原配置已按串号选择时，切版本必须提供该参数。
 
 **改对了仍报 `-151/-1135` 才去查硬件**：拔插探针 USB（错误里的 "reset the debug probe"；正常会枚举
 **3 个设备**：`XDS100 Class USB Serial Port (COMx)` + `Debug Port` + `Auxiliary Port`，少了串口那路就是异常）
@@ -132,7 +132,7 @@ ccxml 决定用哪种连接，`.ccsproject` 是工程级记录。改完跑 `ti_c
 | 操作 | 报错 | 说明 |
 |---|---|---|
 | 只手改 ccxml 的 `desc`/`id`（**href/xml 仍指 v1 的 `TIXDS100usb_Connection.xml`**，`.ccsproject` 没动） | **`-1135`** | 配置自相矛盾：声明 v2、加载 v1 定义 |
-| 用 `ti_c2000_set_probe.ps1 -Probe v2` 一次改齐两处 | **`-1015`** | ★**错误码变了就说明配置对了** |
+| 用 `ti_c2000_set_probe.ps1 -Probe v2 -Serial <当前串号>` 更新连接，再检查具体失败文本 | **`-1015`** | 错误码变化只表明执行进入了不同阶段，不能单独证明配置正确；继续核对目标板及连接 |
 | 继续处理 `-1015` | — | 芯片侧问题，按 TI 原文：**wait in reset（按住 RESET）→ power-cycle → 降 TCLK** |
 
 > 判据：`-1135` 还在 = 配置文件没改全（尤其 `href`/`xml`/`.ccsproject` 三处容易漏）；
@@ -184,29 +184,24 @@ VID/PID    Type            Serial #    Description
 > 而不是"探针坏/线坏"。处置：现场跑 `xds100serial` 读当前串号，填进 ccxml 的
 > `Emulator Selection`，**别沿用上一条记录里的串号**。
 >
-> **坑 2：`ti_c2000_set_probe.ps1` 每次重写 ccxml 都会清掉 `Emulator Selection` 串号块**
-> 切完版本必须补回，且必须是当前实物的串号，否则退化成 `-151`（多块历史设备残留时会更乱）。
+> **坑 2：旧版 `ti_c2000_set_probe.ps1` 重写 ccxml 时曾清掉 `Emulator Selection` 串号块**。
+> 现脚本发现原工程按串号选择探针时，缺少 `-Serial <当前实物串号>` 会报 `SERIAL_REQUIRED` 并停止写入；传入后新配置保留串号选择。切换前先用 `xds100serial` 核对当前实物，切换后只读检查 `.ccxml`，不要为测试探针而用 `-Run` 下载程序。
 >
-> **坑 3（本次最大误判）：`stuck-at-ones` 的真实原因是"仿真器与连接定义不适配"**
+> **坑 3（本次最大误判）：这次 `stuck-at-ones` 与仿真器和连接定义不配对有关**
 > 上午用 v1 定义去驱动一块 **V2.0 探针**时，`connect` 一直报 `-1135`，
 > `dbgjtag` 显示 `JTAG IR/DR scan-path is stuck-at-ones`；
 > 我当时据此判断成"目标板未上电"，往硬件方向折腾了很久。
 > **实际就是仿真器版本与 ccxml 连接定义不配对**（V2.0 探针必须配 v2 定义）。
-> 结论：看到 `stuck-at-ones` 的第一反应是**核对"仿真器实物版本 ↔ ccxml 连接定义"是否配对**，
-> 而不是先怀疑板子供电 / JTAG 排线；`Description` 的 `Vx.x` 只能作参考，
-> 必须结合探针实物丝印/型号确认。
+> 结论：看到 `stuck-at-ones` 时，核对仿真器实物版本、ccxml 连接定义、板卡供电和 JTAG 链路；该报错本身不能唯一确定根因。`Description` 的 `Vx.x` 只能作参考，还需结合探针实物丝印/型号确认。
 >
 > **修正后的处置顺序**：
-> ① `xds100serial` 读当前串号 → ② ccxml 串号填当前值 → ③ v1/v2 各试一次
-> （`ti_c2000_set_probe.ps1 -Probe v1|v2`，切完补串号）
-> → ④ 都失败才查 USB 线 / 板子供电 / JTAG 排线。
+> ① `xds100serial` 读当前串号与探针型号 → ② 与 ccxml 类型和串号核对，必要时用 `ti_c2000_set_probe.ps1 -Probe v1|v2 -Serial <当前串号>` 更新 → ③ 结束 CCS GUI 占用并检查 USB、板子供电及 JTAG 排线 → ④ 根据具体错误文本排查；不要盲试多个版本或重复重启。
 >
 > **补充（同日实测）**：CCS GUI 开着调试会话时，DSS 连同一个探针会报 `-151`
 > （FTDI 打不开），这不是探针故障；跑 DSS 前先关掉 GUI 的调试会话。
 
 **反例（2026-10-27）**：仅凭 `PID_A6D0` 推断成 v2 并建议改 `.ccxml`，是错的。
-两种版本同 PID、同驱动族，CCS 都能连，但 TCK 上限不同；版本写错不会连不上，
-只是跑在较低速率上，所以更容易被忽略。
+两种版本可能同 PID、同驱动族，仅凭 USB PID 不足以判定 v1/v2。版本与连接定义不配对时的结果取决于现场配置；本次出现 `-1135`，不能保证“写错也能连”。
 
 正确的 `Emulator Selection` 写法：
 

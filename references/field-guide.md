@@ -177,7 +177,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | `redefinition of symbol` | 两个模块同名函数/变量（常见 `error()`、`Init()`），改前缀 |
 | 找不到编译器 / `.cproject` 声明的版本没装 | 脚本会自动退回该 CCS 自带的 C2000 编译器并打印 NOTE |
 | 下载失败 `no probe / cannot connect` | 仿真器没插/板上电，或 CCS GUI 已占用 JTAG（先关 GUI 里的调试会话） |
-| `Error -151` / `Error -1135`（探针报错，**时好时坏**） | 连接类型与探针版本不一致（v1 配 v2/v3 会时通时断）：`scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2` 一键对齐（同时改 ccxml + .ccsproject，用法见 `references/other-devices-and-probes.md` §3.1）。**若 `xds100serial` 也扫不到设备、但设备管理器三路都 OK** → 先查 ccxml 的 `Emulator Selection` 是否用了默认 `Only one XDS100 installed`（多块历史设备残留时会打开到幽灵实例，报 `SC_ERR_FTDI_OPEN`），改成**按串号指定**（写法与判据见 `references/other-devices-and-probes.md` §3.1 的 `-151` 专条；2026-11-06 实测这一步才是真因）；再拔插探针 USB（正常枚举 3 个设备）/换 USB 线（能传数据的）/查 JTAG 排线/板子供电/CCS 会话占用 |
+| `Error -151` / `Error -1135`（探针连接失败） | 先读具体错误文本，核对当前探针型号、`xds100serial` 串号、ccxml 连接类型和 `Emulator Selection`、CCS GUI 会话占用，以及板子供电和 JTAG 链路。需切换类型时运行 `scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2 -Serial <当前串号>`；原配置按串号选探针却未给 `-Serial` 时脚本会拒绝写入。错误码变化不能单独证明连接配置正确。现场细节见 `references/other-devices-and-probes.md` §3.1。 |
 | 读回全是 0 | 程序还没跑到（加大 `-RunMs`）、外设时钟未开（`InitSysCtrl()` 没执行）、或没连上目标 |
 | `ready after 250 ms` 但 `TBPRD`/`SCILBAUD` 读回 0 | 就绪判据用了 `.bss` 全局变量，被上次运行的 RAM 残留值误触发（`loadProgram()` 不清 .bss）；改用外设寄存器判据，见 SOP 第 5 点 |
 | 自检 `LINK_ERRORS: unresolved symbols`，且 `SOURCES` 数量比预期少 | 源码在"脚本没扫到的目录"里：脚本按 CCS 规则扫 `APP`/`User`/`DSP2833x_Libraries` + 工程顶层其它目录；若新目录在更深层，或名字在 `$nonSrcDirs` 排除表里，就得调整脚本或用顶层目录 |
@@ -212,7 +212,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 |---|---|
 | 换仿真器 / 换板 | 在 CCS 里改 target configuration，然后 `-Ccxml <文件>`（默认取 `targetConfigs\` 下第一个） |
 | F28379D + XDS100v2 | 使用 `f28379d.xml`、CPU1 port `0x10`；序列号必须按 `xds100serial` 实际输出填写；见 `references/other-devices-and-probes.md` §3.2 |
-| 换探针型号（XDS100v1/v2/v3、XDS110...） | `scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2`（`-List` 列本机可选项、`-DryRun` 只报告、自动备份 .bak）；一次改齐 ccxml + .ccsproject |
+| 换探针型号（XDS100v1/v2/v3、XDS110...） | 核对实物型号与串号后用 `scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2 -Serial <当前串号>`（`-List` 列本机可选项、`-DryRun` 只报告、自动备份 .bak）；原配置按串号选择时必须传 `-Serial`，切完只读核对 ccxml。 |
 | 双核 / 多核器件（F2837xD/F28379D/F2838x） | `-CorePattern ".*CPU1.*"` 选核；每个核各自一份 `.ccxml` 与 `.out` |
 | 用模拟器（无硬件） | ccxml 选 tisim，脚本自动跳过硬件检查；也可 `-NoProbeCheck` |
 | 追加链接脚本（Flash 版等） | `-LinkCmd "F2837xD_Flash_lnk_cpu1.cmd"` |
