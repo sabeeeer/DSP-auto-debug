@@ -1,17 +1,10 @@
 /*
- * dss_template.js  --  DSS (Debug Server Scripting) session template
- *   Filled with real values and launched by ti_c2000_debug.ps1, or run by hand:
- *       <CCS>\ccs_base\scripting\bin\dss.bat  my_session.js
- *   Placeholders: {{CCXML}} {{OUT}} {{RUN_MS}} {{VARS}} {{MODE}} {{WAIT_EXPR}}
+ * DSS template for reading an already running C2000 target. The wrapper fills
+ * {{CCXML}}, {{OUT}}, {{RUN_MS}}, {{VARS}}, {{WAIT_EXPR}} and
+ * {{SESSION_PATTERN}}. Program loading belongs to ti_c2000_debug.ps1 -Run.
  *
- *   API notes (verified on CCS12.8):
- *     - there is NO session.registers; use session.memory.readRegister()/writeRegister()
- *     - target.restart() == CCS "Restart" (reset + go to the program entry point);
- *       a plain loadProgram() alone leaves the PC wherever it was, so a RAM build
- *       would keep running the old flash program
- *     - Rhino has no env.sleep(); use java.lang.Thread.sleep()
- *     - symbol.lookupSymbol() does not exist; use symbol.getAddress()
- *   Re-check another CCS version with scripts/dss_api_probe.js
+ * This file intentionally has no target halt, reset, restart or resume path.
+ * Configure the DSS connection before connect; a halted target is a failure.
  */
 importPackage(Packages.com.ti.debug.engine.scripting);
 importPackage(Packages.com.ti.ccstudio.scripting.environment);
@@ -21,38 +14,40 @@ var CCXML     = "{{CCXML}}";
 var OUT       = "{{OUT}}";
 var RUN_MS    = {{RUN_MS}};
 var VARS      = "{{VARS}}".split(",");
-var MODE      = "{{MODE}}";        // "full" = load+run+read, "readonly" = running-state realtime read
-var WAIT_EXPR = "{{WAIT_EXPR}}";   // readiness expression; empty = plain fixed sleep
+var WAIT_EXPR = "{{WAIT_EXPR}}";
 
 function sleepMs(ms) {
-    if (!ms || ms <= 0) { ms = 500; }
-    try { java.lang.Thread.sleep(ms); } catch (e) { print("DSS: sleep interrupted: " + e); }
+    try { java.lang.Thread.sleep(ms); }
+    catch (e) { print("READONLY_VALUE_ERROR: sleep interrupted: " + e); }
 }
 function tryCall(what, fn) {
     try { fn(); return true; }
     catch (e) { print("DSS: " + what + " failed: " + e); return false; }
 }
+function requireRunning(session, stage) {
+    var stopped;
+    try { stopped = session.target.isHalted(); }
+    catch (e) {
+        print("READONLY_STATE_UNKNOWN: " + stage + ": " + e);
+        throw "cannot verify target running state";
+    }
+    if (stopped) {
+        print("READONLY_STATE_ERROR: target halted " + stage + "; no resume attempted");
+        throw "target is halted";
+    }
+}
 
 var env = ScriptingEnvironment.instance();
-
-// A big application can need minutes before its registers settle. The DSS session
-// must be allowed to live longer than the readiness budget, otherwise long runs
-// die with a script-timeout error instead of a real result.
 var budgetMs = RUN_MS > 0 ? RUN_MS : 5000;
-var oldTimeout = -1;
-try { oldTimeout = env.getScriptTimeout(); } catch (e) { }
-try { env.setScriptTimeout(budgetMs + 300000); } catch (e) { print("DSS: setScriptTimeout failed: " + e); }
-print("DSS: script timeout " + oldTimeout + " -> " + (budgetMs + 300000) + " ms (budget " + budgetMs + " ms)");
+try { env.setScriptTimeout(budgetMs + 300000); }
+catch (e) { print("DSS: setScriptTimeout failed: " + e); }
 
 var server = env.getServer("DebugServer.1");
 server.setConfig(CCXML);
-
-// SESSION_PATTERN selects the core on multi-core devices (F2837xD/F28379D/F2838x):
-// ".*" = first/only core, or e.g. ".*CPU1.*" for core 1 of a dual core part.
 var session = server.openSession("{{SESSION_PATTERN}}");
-if (MODE === "readonly") {
-    // CCS commonly defaults to HaltOnConnect=true. Configure the session BEFORE
-    // connecting; omitting an explicit halt() alone does not make a read non-stop.
+var connected = false;
+
+try {
     try {
         session.options.setBoolean("HaltOnConnect", false);
         session.options.setBoolean("AutoResetOnConnect", false);
@@ -63,160 +58,61 @@ if (MODE === "readonly") {
         print("DSS: realtime options set before connect (no auto-halt/reset/restart)");
     } catch (e0) {
         print("READONLY_CONFIG_ERROR: cannot enable non-stop realtime access: " + e0);
-        tryCall("server.stop", function () { server.stop(); });
         throw "read-only debugger configuration failed";
     }
-}
-try {
-    session.target.connect();
-} catch (e) {
-    print("CONNECT_FAILED: " + e);
-    try { server.stop(); } catch (e2) { }
-    throw "connect failed";       // aborts the session; the caller reports FAILURE: CONNECT_FAILED
-}
-print("DSS: connected (mode=" + MODE + ", core='" + "{{SESSION_PATTERN}}" + "')");
-var readonlyWasHalted = null;
-if (MODE === "readonly") {
-    try { readonlyWasHalted = session.target.isHalted(); }
-    catch (e) {
-        print("READONLY_STATE_UNKNOWN: " + e);
-        tryCall("disconnect", function () { session.target.disconnect(); });
-        tryCall("server.stop", function () { server.stop(); });
-        throw "cannot preserve target run state in read-only mode";
-    }
-    print("DSS: target at connect was " + (readonlyWasHalted ? "halted" : "running"));
-    if (readonlyWasHalted) {
-        print("READONLY_STATE_ERROR: target is halted; runtime read will not start or restart it");
-        tryCall("disconnect", function () { session.target.disconnect(); });
-        tryCall("server.stop", function () { server.stop(); });
-        throw "target not running";
-    }
-}
 
-if (MODE === "full") {
-    session.memory.loadProgram(OUT);
-    print("DSS: loaded " + OUT);
+    try { session.target.connect(); connected = true; }
+    catch (e1) { print("CONNECT_FAILED: " + e1); throw "connect failed"; }
+    print("DSS: connected (mode=readonly, core='{{SESSION_PATTERN}}')");
+    requireRunning(session, "at connect");
+    print("DSS: target at connect was running");
 
-    var restarted = tryCall("target.restart()", function () { session.target.restart(); });
-    if (!restarted) {
-        tryCall("target.reset()", function () { session.target.reset(); });
-        tryCall("PC <- entry point", function () {
-            var addr = null;
-            try { addr = session.symbol.getAddress("code_start"); } catch (e1) { addr = null; }
-            if (addr === null || addr === undefined) {
-                try { addr = session.expression.evaluate("_c_int00"); } catch (e2) { addr = null; }
-            }
-            if (addr === null || addr === undefined) { throw new Error("entry symbol not found"); }
-            session.memory.writeRegister("PC", addr);
-            print("DSS: PC <- " + addr);
-        });
-    }
-    if (!tryCall("runAsynch()", function () { session.target.runAsynch(); })) {
-        print("FULL_RUN_ERROR: failed to start target after program load");
-    }
-
-    var budget = RUN_MS > 0 ? RUN_MS : 5000;
-    if (WAIT_EXPR.length > 0) {
-        // Poll instead of a blind sleep: DSP init code (OLED bit-banging, delays)
-        // can easily take seconds, and reading too early returns all zeros.
-        var waited = 0;
-        var ready  = false;
-        while (waited < budget) {
-            sleepMs(250); waited += 250;
-            // halt/evaluate/resume - guarded so no exception noise is produced
-            try { if (!session.target.isHalted()) { session.target.halt(); } } catch (e2) { }
-            try { ready = ("" + session.expression.evaluate(WAIT_EXPR)) !== "0"; } catch (e3) { ready = false; }
-            if (ready) {
-                print("DSS: ready ('" + WAIT_EXPR + "') after " + waited + " ms");
-                if (waited <= 500) {
-                    // "Ready" at the first/second poll is suspicious: loadProgram() does NOT clear
-                    // .bss, so a global struct/variable can already be non-zero from RAM leftovers
-                    // while the program has not reached the code that (re)writes it (seen on
-                    // 4-1Two_Level: 'OpenLoopCtrl.usCmpA != 0' fired at 250 ms while SCILBAUD/TBPRD
-                    // were still 0). A peripheral register is a far better readiness test.
-                    print("NOTE    : ready within " + waited + " ms - if that expression is a .bss variable");
-                    print("          this may be a RAM leftover, not proof the init code ran. Cross-check");
-                    print("          with a peripheral register, e.g. -WaitFor \"EPwm1Regs.TBPRD == <value>\".");
-                }
-                break;
-            }
-            try { if (session.target.isHalted()) { session.target.runAsynch(); } }
-            catch (e4) { print("FULL_RUN_ERROR: failed to resume during readiness polling: " + e4); break; }
-        }
-        if (!ready) { print("WAIT_TIMEOUT: '" + WAIT_EXPR + "' not reached within " + budget + " ms"); }
-    } else {
-        print("DSS: running for " + budget + " ms");
-        sleepMs(budget);
-    }
-} else {
-    // readonly: load symbols only. RestartOnSymbolLoad was disabled above.
-    if (!tryCall("symbol.load()", function () { session.symbol.load(OUT); })) {
-        print("READONLY_SYMBOL_ERROR: could not load symbols without downloading");
-        tryCall("disconnect", function () { session.target.disconnect(); });
-        tryCall("server.stop", function () { server.stop(); });
+    try { session.symbol.load(OUT); }
+    catch (e2) {
+        print("READONLY_SYMBOL_ERROR: could not load symbols without downloading: " + e2);
         throw "read-only symbol load failed";
     }
     print("DSS: symbols loaded (readonly, no program download)");
-    if (session.target.isHalted()) {
-        print("READONLY_STATE_ERROR: target halted during symbol load");
-        tryCall("disconnect", function () { session.target.disconnect(); });
-        tryCall("server.stop", function () { server.stop(); });
-        throw "target halted during symbol load";
-    }
+    requireRunning(session, "during symbol load");
+
     if (WAIT_EXPR.length > 0) {
-        var roBudget = RUN_MS > 0 ? RUN_MS : 5000;
-        var roWaited = 0;
-        var roReady = false;
-        while (roWaited < roBudget) {
-            sleepMs(250); roWaited += 250;
-            try {
-                if (session.target.isHalted()) {
-                    print("READONLY_STATE_ERROR: target halted during runtime polling");
-                    break;
-                }
-                roReady = ("" + session.expression.evaluate(WAIT_EXPR)) !== "0";
-            } catch (e5) { print("READONLY_VALUE_ERROR: readiness read failed: " + e5); break; }
-            if (roReady) {
-                print("DSS: ready ('" + WAIT_EXPR + "') after " + roWaited + " ms");
+        var waited = 0;
+        var ready = false;
+        while (waited < budgetMs) {
+            sleepMs(250); waited += 250;
+            requireRunning(session, "during runtime polling");
+            var v;
+            try { v = ("" + session.expression.evaluate(WAIT_EXPR)).replace(/^\s+|\s+$/g, "").toLowerCase(); }
+            catch (e3) {
+                print("READONLY_VALUE_ERROR: readiness read failed: " + e3);
+                throw "readiness read failed";
+            }
+            var numeric = Number(v);
+            ready = v === "true" || (v !== "false" && v !== "" && !isNaN(numeric) && numeric !== 0);
+            if (ready) {
+                print("DSS: ready ('" + WAIT_EXPR + "') after " + waited + " ms");
                 break;
             }
         }
-        if (!roReady) {
-            print("WAIT_TIMEOUT: '" + WAIT_EXPR + "' not reached within " + roWaited + " ms");
+        if (!ready) { print("WAIT_TIMEOUT: '" + WAIT_EXPR + "' not reached within " + waited + " ms"); }
+    }
+
+    print("DSS: running - reading expressions");
+    for (var i = 0; i < VARS.length; i++) {
+        var name = VARS[i].replace(/^\s+|\s+$/g, "");
+        if (name.length === 0) { continue; }
+        requireRunning(session, "during runtime read");
+        try {
+            var value = session.expression.evaluate(name);
+            print("VAR " + name + " = " + value);
+        } catch (e4) {
+            print("VAR " + name + " = <ERROR: " + e4 + ">");
         }
     }
+    requireRunning(session, "after runtime read");
+    print("DSS: target still running after read");
+} finally {
+    if (connected) { tryCall("disconnect", function () { session.target.disconnect(); }); }
+    tryCall("server.stop", function () { server.stop(); });
 }
-
-if (MODE !== "readonly") {
-    tryCall("halt()", function () { session.target.halt(); });
-}
-print(MODE === "readonly" ? "DSS: running - reading expressions" : "DSS: halted - reading expressions");
-for (var i = 0; i < VARS.length; i++) {
-    var name = VARS[i].replace(/^\s+|\s+$/g, "");
-    if (name.length === 0) { continue; }
-    try {
-        var v = session.expression.evaluate(name);
-        print("VAR " + name + " = " + v);
-    } catch (e) {
-        print("VAR " + name + " = <ERROR: " + e + ">");
-    }
-}
-
-if (MODE === "readonly") {
-    try {
-        if (session.target.isHalted()) { print("READONLY_STATE_ERROR: target halted during runtime read"); }
-        else { print("DSS: target still running after read"); }
-    } catch (e9) { print("READONLY_STATE_UNKNOWN: " + e9); }
-} else {
-    if (!tryCall("resume", function () { session.target.runAsynch(); })) {
-        print("FULL_RUN_ERROR: failed to resume target after reading expressions");
-    } else {
-        try {
-            if (session.target.isHalted()) { print("FULL_RUN_ERROR: target remains halted after resume"); }
-            else { print("DSS: target running after read"); }
-        } catch (e10) { print("FULL_RUN_ERROR: cannot verify target run state: " + e10); }
-    }
-}
-tryCall("disconnect", function () { session.target.disconnect(); });
-tryCall("server.stop", function () { server.stop(); });
 print("DSS: done");

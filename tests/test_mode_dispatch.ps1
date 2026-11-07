@@ -32,6 +32,14 @@ try {
     if ($LASTEXITCODE -eq 0 -or -not @($conflictOutput | Where-Object { $_ -match '^FAILURE: READONLY_MODE_CONFLICT$' }).Count) {
         throw 'Read-only and build were allowed together'
     }
+    $combinedOutput = @(& pwsh -NoProfile -File $debug -ProjectPath $project -Build -Run -ReadVars gBootStage 2>&1)
+    if ($LASTEXITCODE -eq 0 -or -not @($combinedOutput | Where-Object { $_ -match '^FAILURE: READ_REQUIRES_SEPARATE_READONLY$' }).Count) {
+        throw 'Build/run/read combination was allowed to enter the halting DSS path'
+    }
+    $waitOnlyOutput = @(& pwsh -NoProfile -File $debug -ProjectPath $project -Run -WaitFor 'gBootStage == 5' 2>&1)
+    if ($LASTEXITCODE -eq 0 -or -not @($waitOnlyOutput | Where-Object { $_ -match '^FAILURE: WAIT_REQUIRES_READONLY$' }).Count) {
+        throw 'Run-only command silently accepted a read condition'
+    }
 
     # Validation must run before the script searches for CCS or touches JTAG.
     $badReads = @('gValue=1', 'gValue++', 'functionCall()', '(*f)()', 'gValue ? x : y', 'gValue;foo', 'gArray[gIndex]')
@@ -49,7 +57,16 @@ try {
     if (-not @($safeOutput | Where-Object { $_ -match '^FAILURE: NO_PROJECT$' }).Count) {
         throw 'Safe read expressions were rejected before project lookup'
     }
-    Write-Output 'PASS: build-only never downloads; implicit load and read-only/build conflict rejected; read-only expressions gated'
+    $autoReadonlyOutput = @(& pwsh -NoProfile -File $debug -ProjectPath $project -CcsRoot $ccs -ReadVars 'gBootStage' 2>&1)
+    if (-not @($autoReadonlyOutput | Where-Object { $_ -match '^FAILURE: NO_OUT_FILE$' }).Count -or
+        -not @($autoReadonlyOutput | Where-Object { $_ -match 'read-only mode will not build or download' }).Count) {
+        throw 'Read-only shorthand did not route to the non-stop path'
+    }
+    $dssTemplate = Get-Content -LiteralPath (Join-Path $skillRoot 'scripts/dss_template.js') -Raw
+    if ($dssTemplate -match 'session\.target\.(halt|runAsynch|reset|restart)\s*\(' -or $dssTemplate -match 'session\.memory\.loadProgram\s*\(') {
+        throw 'Read-only DSS template contains a target state change or program load'
+    }
+    Write-Output 'PASS: build/run/read separated; read-only DSS has no halt/reset/load; expressions gated'
     Write-Output 'RESULT: OK'
 } finally {
     if (Test-Path -LiteralPath $fixture) {

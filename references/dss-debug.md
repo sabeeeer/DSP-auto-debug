@@ -1,7 +1,6 @@
-# 自动进调试器：loadti 与 DSS 用法（CCS12 实测）
+# 下载运行与 DSS 运行态只读（CCS12 实测）
 
-> 两条通道：**loadti**（显式下载+运行）与 **DSS**（脚本化会话，可在运行态实时读变量）。
-> 都由 `scripts/ti_c2000_debug.ps1` 按 `-ReadVars` 是否存在自动选择。
+> 两步顺序：**loadti** 显式下载并运行新程序；随后 **DSS 只读**在运行态读取变量。`-Build/-Run/-LoadOnly` 与 `-ReadVars` 不能合在同一调用；只带 `-ReadVars` 的旧写法会自动进入只读模式。
 
 ## 0. 前置
 
@@ -39,16 +38,15 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 & '<CCS_ROOT>\ccs_base\scripting\bin\dss.bat' '<脚本>.js'
 ```
 
-`scripts/dss_template.js` 是模板，占位符 `{{CCXML}} {{OUT}} {{RUN_MS}} {{VARS}} {{MODE}}` 由
+`scripts/dss_template.js` 是**只读模板**，占位符 `{{CCXML}} {{OUT}} {{RUN_MS}} {{VARS}} {{WAIT_EXPR}}` 由
 `ti_c2000_debug.ps1` 填好后写到临时文件再执行：
 
-- `MODE=full`：`loadProgram` → `target.restart()` → **轮询就绪** → `halt` → 读表达式 → 继续运行 → 断开
-- `MODE=readonly`：连接前关闭 `HaltOnConnect`、`AutoResetOnConnect`、`RestartOnSymbolLoad`、`UseLegacyStopMode`，打开 `AllowInterruptsWhenHalted` 与 `PoliteRealtimeMode` → 只 `symbol.load()` → 在运行态直接读值，不主动 `halt()`、`runAsynch()` 或下载；正式入口是 `scripts/ti_c2000_read_runtime.ps1`，见[只读模式](read-only-mode.md)。本机 CCS12.8 的 `HaltOnConnect` 初始值为 true；临时脚本虽然没有 `halt()`，连接时仍可能停核。
+- 连接前关闭 `HaltOnConnect`、`AutoResetOnConnect`、`RestartOnSymbolLoad`、`UseLegacyStopMode`，打开 `AllowInterruptsWhenHalted` 与 `PoliteRealtimeMode` → 只 `symbol.load()` → 在运行态读值；模板里没有主动停核、恢复、复位或下载路径。正式入口是 `scripts/ti_c2000_read_runtime.ps1`，见[只读模式](read-only-mode.md)。本机 CCS12.8 的 `HaltOnConnect` 初始值为 true，仅删除显式 `halt()` 不够。
+- 历史 `MODE=full` 曾 `loadProgram → restart → halt → read → runAsynch`，现已移除。不要用临时 `dss.bat` 脚本复制这条旧链路；多变量、数组也走只读入口。问题复盘见[2026-11-07 读取中停核案例](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md)。
 
 ### 就绪轮询（重要）
 
-原模式跑完立刻读可能拿到 0（本工程 OLED 模拟 I2C 初始化要 ~3.25 s）。模板因此可**每 250 ms 停机采样一次就绪表达式**。
-原模式默认取 `-ReadVars` 的第一项 `!= 0`，也可用 `-WaitFor "<expr>"` 指定（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`）；只读模式默认直接取当前值，需要等待已有程序状态时显式传 `-WaitFor`，在运行态轮询，不停核、编译或下载。
+下载并运行后立刻读可能拿到 0（本工程旧版 OLED 模拟 I2C 初始化曾需 ~3.25 s）。只读调用可用 `-WaitFor "<expr>"` 指定就绪条件（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`），**每 250 ms 在运行态读取一次**，无停核采样。没给 `-WaitFor` 时直接读当前值。
 命中即打印 `DSS: ready ('...') after N ms` 再正式读值；到预算（默认 8000 ms，`-RunMs` 可改）仍未命中会打印 `WAIT_TIMEOUT` 并采样，脚本默认返回 `RESULT: FAIL`，这些值不能当成就绪后的证据。
 轮询用 `isHalted()` 做保护、静默捕获异常，不会污染失败判定。
 
@@ -97,9 +95,7 @@ volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5
 | 变量是"上次运行的合理值"（如 `fFreq = 50`，而本次传 5） | RAM 残留（`loadProgram()` 不清 `.bss`） | "我的改动没生效 / 没编进去" |
 | `TBCTR` 不变、`theta` 不动 | 同上，先确认阶段 | "中断没跑 / 时钟没开" |
 
-**跑 RAM 程序的关键**：`memory.loadProgram()` 本身**不会**把 PC 指到程序入口，复位后又默认跑 Flash 里的旧程序。
-所以模板用 `target.restart()`（等价 CCS 的 Restart：复位并跳到加载程序的入口）；若该版本没有 `restart()`，
-退回 `target.reset()` + `memory.writeRegister("PC", symbol.getAddress("code_start"))` + `runAsynch()`（实测 `code_start=0x0` 可用）。
+**历史 full 模式的教训**：`memory.loadProgram()` 本身不会把 PC 指到程序入口，曾导致读到 Flash 旧程序；旧模板因此补了 `target.restart()` 等操作。当前模板只读，**不做这些操作**；新程序由前一步显式 `-Run` 通过 loadti 的 `-r -a` 启动。读数前仍需核对板上固件与符号 `.out` 的身份。
 
 ### CCS12.8 实测 API 备忘
 
@@ -123,8 +119,8 @@ volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5
 |---|---|
 | `JS: TypeError: Cannot find function sleep` | 用了 `env.sleep`；改 `java.lang.Thread.sleep(ms)` |
 | `Cannot call method "writeRegister" of undefined` | `session.registers` 不存在；改 `session.memory.writeRegister` |
-| `identifier not found: EPwm1Regs` | 会话没装载符号：full 模式用 `loadProgram`，readonly 模式要先 `symbol.load` |
-| 读回全是 0 | ① 程序没跑到（换/加大 `-WaitFor` 与 `-RunMs`，别用固定等待）② 外设时钟未开（对应模块的 `PCLKCRx` 位没使能）③ 实际跑的是 Flash 旧程序（没做 `restart()`/写 PC） |
+| `identifier not found: EPwm1Regs` | 只读会话没有载入匹配的符号，或板上固件与指定 `.out` 不一致；检查 `symbol.load`、目标核与构建标识 |
+| 读回全是 0 | ① 程序没跑到（在只读调用中换/加大 `-WaitFor` 与 `-RunMs`）② 外设时钟未开（对应模块的 `PCLKCRx` 位没使能）③ 板上固件与本地 `.out` 不匹配；不要改用停核读取 |
 | 想确认"到底跑到哪了" | 读 `PC`，再拿 map 文件（`%TEMP%\ti_c2000_build\<工程>\<工程>.map`）查该地址落在哪个函数；配合 `GpioCtrlRegs.GPADIR`、`SysCtrlRegs.PCLKCR1` 判断初始化进度 |
 | `Error reading memory: Address: 0x7012 ... 0x20000` | 用 `memory.readWord` 直接读外设帧会失败，改走 `expression.evaluate`（如 `SysCtrlRegs.PCLKCR1.all`） |
 | `no probe / cannot connect` | 仿真器未插/板未上电，或 CCS GUI 占用了 JTAG |
@@ -143,4 +139,5 @@ volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5
 
 - 每次运行都新建/关闭 DSS 会话，脚本结束前 `disconnect()` + `server.stop()`，避免占用 JTAG 影响 CCS GUI。
 - `-ReadOnly` 模式不编译、不下载；已有 `.out` 只给调试器加载符号。调试器实时选项和固件 `ERTM` 配合使用；若目标已暂停则报错，不自动启动。
+- 不用 `connect → halt → readData/evaluate → runAsynch` 的裸脚本观测数据。`runAsynch()` 返回或 `isHalted()==false` 不足以证明应用继续执行；需要确认时在只读模式跨时间读取固件中的单调计数，并核对 `.out` 身份。
 - 运行态 `evaluate` 不提供同一瞬间的多变量原子快照。要观察变化可连续多次采样并记录时间；若读不到，先查实时选项、DBGM、符号与目标核，不退回自动停核。

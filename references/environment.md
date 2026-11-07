@@ -27,12 +27,12 @@
   - 用 CCS12 的 `ti-cgt-c2000_22.6.1.LTS`：`RESULT: OK`（工程 `.cproject` 是 `OUTPUT_FORMAT=COFF`，22.6.1 仍支持 COFF）
 - **链接**：`28335_RAM_lnk.cmd` + `DSP2833x_Headers_nonBIOS.cmd` + `IQmath.lib` + `rts2800_fpu32.lib` → `.out` 生成成功。
 - **失败可判定**：语法错误 → cl2000 非零退出 + `error #29`；未定义符号 → 链接退出码 1 且不产出 `.out`（实测 `neg.out_exists=False`）。
-- **CCS12 全自动调试闭环（实测成功）**：
-  `ti_c2000_debug.ps1 -Build -Run -RunMs 4000 -ReadVars "PC,EPwm1Regs.TBPRD,..."` →
+- **CCS12 旧版停核读回（历史实测，现已停用）**：
+  旧命令曾把 `-Build -Run` 与 `-ReadVars` 合在一次调用（现在明确拒绝）→
   自动检测到 CCS12 安装目录、用 22.6.1 构建、DSS 连接 XDS100、加载、`target.restart()`、运行、停机读回：
   `TBPRD=65535`、`CMPA.all=0xCCCC0000`(即 CMPA=0xCCCC=52428=65535×80%)、`TBCTL.CLKDIV=3`、
   `GPADIR.bit.GPIO8=1`(OLED 初始化已执行)、`GPAMUX1.bit.GPIO0=1`(EPWM1A 复用已配置)、`SCILBAUD=39`(115200bps)
-  → 与 `User/main.c` 逐项吻合。
+  → 当时与 `User/main.c` 逐项吻合，但该命令现在会被拒绝，因为读回曾主动停核。当前流程是先 `-Build -Run`，随后单独 `ti_c2000_read_runtime.ps1 -Variables "PC,EPwm1Regs.TBPRD,..."`，不能直接复制旧命令。
 - **无仿真器时**：`ti_c2000_debug.ps1` 会打印 `PROBE : NOT FOUND` + 中文提示并返回退出码 3。
 - **F28379D + XDS100v2 实机闭环（2026-10-10 实测成功）**：
   CCS12.8.1 + `f28379d.xml` 目标定义 + XDS100v2 序列号 `TI90I42A`；
@@ -50,12 +50,11 @@
 2. 工程里原有的 `Debug/makefile` 是 **CCS12（`<CCS_ROOT>/tools/compiler/ti-cgt-c2000_22.6.1.LTS`）** 生成的（不是"别的机器拷来的"）。
    这些自动生成的 `*.mk` 已被清掉，CCS 下次构建会自己重新生成；若 GUI 报找不到编译器，看 `Debug/makefile` 的 `CG_TOOL_ROOT`。
 3. **RAM 程序 + 复位**：板上复位后默认跑的是**Flash 里的旧程序**（实测读到它配的 `TBPRD=7500`/`CLKDIV=0`）。
-   所以"加载后能不能跑"取决于有没有把 PC 指到程序入口——DSS 里用 `target.restart()`，或显式
-   `memory.writeRegister("PC", symbol.getAddress("code_start"))`（`code_start=0x0`，实测可用）。
+   所以历史 DSS `loadProgram()` 路径还需处理 PC 入口；**当前运行态读取模板已删除该路径**。更新程序用前一步 `ti_c2000_debug.ps1 -Run` 下载并运行，读数只用只读模式。
 4. **读回时序（最容易误判的一条，已用轮询解决）**：本工程带 OLED 模拟 I2C，`OLED_Init` 清屏 + 4 行字符串要**约 3.25 秒**才跑完。
    实测多采样：t=1/2/3 s 时 PC 停在 `oled.o` 的延时循环里、`TBPRD=0`；**t=4 s 起** `TBPRD=65535`、`PCLKCR1=1`、`SCILBAUD=39` 并保持稳定（程序是确定性的，不是被反复复位）。
-   因此 `dss_template.js` 不再"盲等固定时间"，而是**每 250 ms 停机检查一次就绪表达式**（默认取 `-ReadVars` 第一项 `!= 0`），命中才采样；
-   默认预算 8000 ms，`-WaitFor` 可自定义判据。盲等 3000/5000 ms 都出现过读到 0 的情况，不要退回固定等待。
+   因此当前只读模板可用 `-WaitFor` **每 250 ms 在运行态检查一次**，命中才采样；
+   默认预算 8000 ms。盲等 3000/5000 ms 都出现过读到 0 的情况，不要退回固定等待或停核轮询。
 5. **DSS API 版本差异**：CCS12 的 DSS 里 `session.registers` **不存在**，寄存器要用 `session.memory.readRegister/writeRegister`；
    `symbol.lookupSymbol()` 也不存在（用 `symbol.getAddress()`）。换 CCS 版本先跑 `scripts/dss_api_probe.js`。
    Rhino 没有 `env.sleep()`，要用 `java.lang.Thread.sleep(ms)`。

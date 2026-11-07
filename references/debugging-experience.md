@@ -34,6 +34,7 @@
 | DSP28335 / 本机 SDK | FPU software / 工程选项 | 源码写软件浮点、`.cproject` 仍启用 `fpu32`、错误验收 | 待复核 | [2026-10-28-fpu-software-project-options](debug-cases/dsp28335/2026-10-28-fpu-software-project-options.md) |
 | DSP28335 / CCS 12.8 DSS | 实时读 / `loadti` 运行状态 | `HaltOnConnect`、ERTM、只读停核、`-Build` 隐式 `-l`、PC 在 Flash 而 `.out` 在 RAM | 已定位 | [2026-11-07-realtime-read-implicit-loadonly](debug-cases/dsp28335/2026-11-07-realtime-read-implicit-loadonly.md) |
 | DSP28335 / 4-1 两电平逆变器 | ADC 采样链 / 校准 / 探针 / GPIO | `AdcMirror` 对齐、误加 DMA、SOC、通道误判、整流平均、零点、校准超时放波、OLED 引脚、XDS100 串号 | 待复核 | [2026-11-07-adc-chain-port-audit](debug-cases/dsp28335/2026-11-07-adc-chain-port-audit.md) |
+| DSP28335 / 4-1 两电平逆变器 | DSS / 运行态数组读取 | 裸 `connect`、`halt → readData → runAsynch`、继电器释放、`gAdcAllBuf[16][400]`、62516/65012、字寻址 | 待复核 | [2026-11-07-read-halt-bulk-array](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md) |
 
 新案例按[案例模板](debug-cases/CASE-TEMPLATE.md)记录，原始日志/波形优先保存在对应工程或用户指定位置，案例中写稳定路径与关键读数，避免把大量原始数据复制进技能。
 

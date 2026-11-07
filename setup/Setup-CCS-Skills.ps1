@@ -213,7 +213,8 @@ Write-Output "================ MANUAL STEPS (cannot be automated) ==============
     "   IMPORTANT: .cproject stores ABSOLUTE include paths to the TI headers (DSP2833x_*/F28xx_*).",
     "   Fix those paths in CCS (Project > Properties > Build > C2000 Compiler > Include Options) or Edit .cproject.",
     "5. Verify: scripts\ti_c2000_build.ps1 -ProjectPath <project>      (compile+link, no hardware needed)",
-    "   then:  scripts\ti_c2000_debug.ps1   -ProjectPath <project> -Build -Run [-ReadVars ...]",
+    "   then:  scripts\ti_c2000_debug.ps1   -ProjectPath <project> -Build -Run",
+    "   read:  scripts\ti_c2000_read_runtime.ps1 -ProjectPath <project> -Variables <names>",
     "6. Hardware side: probe plugged in, board powered, targetConfigs\*.ccxml present in the project.",
     ("7. Restart the " + $Target + " session so the new skill is picked up" + $(if ($doHooks) { " (+ hooks)" } else { "" }) + ".")
 ) | ForEach-Object { Write-Output $_ }

@@ -1,11 +1,11 @@
 # CCS 详细操作手册
 
-> 此文保留原模式的命令、排错表和现场经验。只要读取当前板数据值且不编译、下载时，先看[只读模式](read-only-mode.md)。板级数值只适用于文中注明的工程；如与当前工程事实或主技能任务路由冲突，以后者为准。
+> 此文保留执行模式的命令、排错表和现场经验。只要读取当前板数据值且不编译、下载时，先看[只读模式](read-only-mode.md)。板级数值只适用于文中注明的工程；如与当前工程事实或主技能任务路由冲突，以后者为准。
 
 
 # TI C2000 / DSP2833x 全自动开发 + 调试（CCS12 / CCS6）
 
-把原模式的「写代码 → 编译 → 下载 → 读回结果」链路自动化。**交付代码改动前必须有真实构建证据**；只读模式仅交付实际读取的数据，不要求编译。
+执行模式流程：**运行态读取基线 → 分析 → 确需修改时写代码、编译、下载运行 → 运行态复读验证**。所有数据读取都调用[只读入口](read-only-mode.md)，不可停核或复位。周期信号先在固件侧录入完整窗口，例如 50 Hz、1 kHz 的 10 个周期为 200 帧、200 ms；随后可花更长时间在目标持续运行时传出并分析，不能声称 JTAG 必须在 200 ms 内完成传输。**交付代码改动前必须有真实构建证据**；只读模式仅交付实际读取的数据，不要求编译。
 
 ## 电网锁相任务入口
 
@@ -65,10 +65,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps
 # ② 构建 + 下载运行（自动检测仿真器与 CCS 安装位置）
 pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
 
-# ③ 构建 + 下载运行 + 读回变量/寄存器（最完整的验证；自动轮询到就绪再采样）
-pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
-# 就绪判据默认取 -ReadVars 的第一项（变为非 0 即认为程序跑到位）；也可显式指定：
-#   ... -WaitFor "GpioCtrlRegs.GPADIR.bit.GPIO8 != 0" -RunMs 15000
+# ③ 程序运行后，单独用只读模式等就绪、读变量/寄存器：不再停核
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "<工程根目录>" `
+  -WaitFor "EPwm1Regs.TBPRD != 0" -RunMs 15000 `
+  -Variables "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,EPwm1Regs.TBCTL.bit.CLKDIV,SciaRegs.SCILBAUD"
 # ★判据别写太宽松：程序进 main 之后可能还要好几秒初始化（本类工程常有"上电闪灯标记"阻塞 ~3.5s）。
 #   用 "!= 0" 或 .bss 变量做判据容易"一进 main 就满足"，于是读回一堆"尚未配置"的状态
 #   （TBPRD/ETSEL/ETPS/PIEIERx/IER 全 0、串口抓包"数据恒定"），被误判成"EPWM 没配/中断没跑/
@@ -76,13 +76,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps
 #   ... -WaitFor "gBootStage == 5"     ← 5 = 已进主循环（推荐在 main 里埋这种"阶段追踪变量"）
 #   详见 references/dss-debug.md 的「判据怎么选」和「读太早的典型误判清单」
 
-# ④ 当前程序运行态直接读值：不编译、不下载、不主动停核；见 references/read-only-mode.md
+# ④ 后续继续读当前运行程序：不编译、不下载、不主动停核；见 references/read-only-mode.md
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "<工程根目录>" -Variables "EPwm1Regs.TBCTR"
 ```
 
-`ti_c2000_debug.ps1 -Build` 单独使用现在只构建，**不会下载**；下载后运行用 `-Build -Run` 或已有 `.out` 的 `-Run`。只有明确指定 `-LoadOnly` 才会下载后暂停。旧脚本无动作参数时曾隐式调用 `loadti -l`，会造成“下载后不运行”的误判；现在会拒绝该调用。
+`ti_c2000_debug.ps1 -Build` 单独使用只构建；下载后运行用 `-Build -Run` 或已有 `.out` 的 `-Run`。只有明确指定 `-LoadOnly` 才会下载后暂停。`-Build/-Run/-LoadOnly` 与 `-ReadVars` 同时出现会被拒绝，读取必须分成第二次只读调用。旧脚本无动作参数时曾隐式调用 `loadti -l`，现在也会拒绝。
 
-脚本输出英文（避免 PowerShell 中文编码问题），**判定只看 `RESULT: OK` / `RESULT: FAIL`**。
+脚本输出英文（避免 PowerShell 中文编码问题）；成功须同时有 `RESULT: OK` 和退出码 0。
 失败会打印前 25 条错误、错误原因和完整日志路径（`%TEMP%\ti_c2000_build\<工程名>\build.log`）。
 
 自检输出先看这几行：`CONFIG:` = 所用构建配置（多配置工程按"工程下存在同名输出目录"选）、
@@ -107,10 +107,10 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "
    **产物绝对不能放进工程目录树**：CCS 托管构建会把工程里每个 `.obj` 也当链接输入，与它自己编出来的
    目标文件撞名 → 满屏 `error #10056: symbol "..." redefined`。脚本默认写 %TEMP%，且启动时自动清掉旧版
    留在 `<工程>\Debug\auto_build\obj` 的残留；用 `-OutputDir` 指到工程内只会打 WARNING，别这么干。
-4. **进调试器**：跑 ② 或 ③ 。脚本先检测 XDS 仿真器，在线才连；`-ReadVars` 走 DSS：**加载 → 复位并跳到程序入口 → 运行 → 停机 → 读表达式**。
-5. **看结果**：脚本会先轮询就绪（`DSS: ready (...) after N ms`），再逐条打印 `VAR xxx = 值`，对着源码核对
+4. **下载并运行**：跑 ②，脚本检测 XDS 仿真器后才下载、复位并启动新程序。只在这一步允许因更新程序而改变板上状态。
+5. **运行态只读**：跑 ③。DSS 在连接前关闭自动停核和自动复位，仅载入 `.out` 符号；在目标运行时轮询就绪并逐条打印 `VAR xxx = 值`，对着源码核对
    （本工程实测：`TBPRD=65535`、`CMPA.all=0xCCCC0000`(即 CMPA=0xCCCC=52428=65535×80%)、`CLKDIV=3`、`SCILBAUD=39`(115200bps)、`GPADIR.bit.GPIO8=1`，就绪点约 3.25 s）。
-   若一直读回 0：先加大 `-RunMs`（默认预算 8000 ms）或用 `-WaitFor` 换一个更合适的就绪判据，再排查代码。
+   若一直读回 0：先核对正在运行的固件与 `.out` 是否匹配，再加大只读调用的 `-RunMs`（默认预算 8000 ms）或换 `-WaitFor` 判据；不可通过停核读数来补救。
    ★ **就绪判据优先用外设寄存器**（如 `EPwm1Regs.TBPRD == 14999`、`SciaRegs.SCILBAUD != 0`），**别用 .bss 全局变量**：
    `loadProgram()` 不清 .bss，上次运行留下的 RAM 值会让判据瞬间成立（症状：`ready after 250 ms` 但 `TBPRD=0 / SCILBAUD=0`，
    其实程序还没跑到初始化）。脚本对"≤500 ms 就就绪"会打 NOTE 提醒；实测换寄存器判据后 3500 ms 才是真就绪。
@@ -127,9 +127,10 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "
 | 上层命令 5 分钟会被打断 / 想边等边干别的 | 加 `-Background`：立即返回并打印日志路径 |
 
 ```powershell
-# 5 分钟级长调试，后台跑，随时查日志
+# 第一步下载运行；第二步等待就绪并只读（可后台跑，随时查日志）
+pwsh -NoProfile -File "...\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -Build -Run
 pwsh -NoProfile -ExecutionPolicy Bypass -File "...\ti_c2000_debug.ps1" `
-  -ProjectPath "<工程根目录>" -Build -Run -RunMs 300000 -WaitFor "EPwm1Regs.TBPRD != 0" `
+  -ProjectPath "<工程根目录>" -ReadOnly -RunMs 300000 -WaitFor "EPwm1Regs.TBPRD != 0" `
   -ReadVars "EPwm1Regs.TBPRD,SciaRegs.SCILBAUD" -Background
 # 之后轮询日志（出现 RESULT: 即结束）
 Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
@@ -189,7 +190,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | 下载成功但现象不对 | 先看 RAM/Flash 链接脚本、看门狗、时钟；再用 `-ReadVars` 读关键寄存器对照源码 |
 | `The script 'x.ps1' cannot be run because it contained a "#requires" statement for Windows PowerShell 7.0`（`ScriptRequiresUnmatchedPSVersion`）| 用 Windows PowerShell 5.1（`powershell.exe`）跑了要求 PS7 的脚本。**本机统一用 pwsh 7.6**（`%LOCALAPPDATA%\Microsoft\PowerShell\7\pwsh.exe`）：自己执行命令时用 `pwsh`；脚本内部启动子进程也要用 `$PSHOME\pwsh.exe` 而不是 `powershell`（`ti_c2000_debug.ps1` 的 `-Build` 与后台实例早先踩过，已修）|
 
-| **ADC 数据不变或卡住**（连续多帧读回同值、或结果寄存器恒为 0）| ① C28x 上"软件触发 SEQ1"不可靠（连"等 BSY 置起再等它清零"都拿不到新值）→ 改 **EPWM SOCA 硬件触发**；② `ADCTRL2` 被 `InitAdc()` / 工程老例程的 `ADCTRL2.all = 0x2000` **整体覆写**，把触发位清掉 → 自定义 ADC 初始化放最后 + 收尾兜底重设。DSS 读 `ADCTRL2.all`/`ADCST.all`/`ADCRESULT2` 一眼定位。详见 `references/c28x-pitfalls.md` §1 |
+| **ADC 数据不变或卡住**（连续多帧读回同值、或结果寄存器恒为 0）| ① 核对 SOC 触发是否与 PWM/读回时序同步；本板 MTG 参考工程在 EPWM1 ISR 内写软件 `SOC_SEQ1`，硬件 EPWM SOCA 是另一种可选路径，不能一概断言软件 SOC 不可靠；② 检查 `ADCTRL2` 是否被后续整体赋值覆写。只读核对触发位、忙位和结果，单次全 0 不足以定位。详见 `references/c28x-pitfalls.md` §1 |
 | **波形偶发尖刺 / 数据里频繁出现 0** | ADC 在**新序列开始时清结果寄存器**，在转换途中读就会拿到 0（越靠后的通道越容易中招；"读两遍一致才采信"也挡不住）。解法：读前等 `SEQ1_BSY == 0`，再**连读 5 次取中值**；根治是在 ADC/EPWM 中断里读。详见 §1.3 |
 | **SPI 外设（DAC 等）输出畸变**（趋势对但有台阶/削顶/尖刺、码值翻倍、看着像“通道串扰/某路坏了”）| ① `SPISTS.bit.INT_FLAG` 是**只读**的整字完成标志，只能靠**读 `SPIRXBUF`** 清（写 1 清的是 `OVERRUN_FLAG`）；不清就直接 `while(INT_FLAG==0)`，第 1 次之后恒为 1 → 立即通过 → LOAD 提前锁残字（实测 `0xFF` 锁成 `0x80`）；② 只等 `BUFFULL_FLAG` 同理不够。解法：**读 `SPIRXBUF` 清标志 → 写 `SPITXBUF` → 等 `INT_FLAG`**，再拉 LOAD；时钟顶到器件手册上限（TLV5620 ≤1 MHz，不要提 3.75 MHz）。详见 §2.1~§2.3 与[案例](debug-cases/dsp28335/2026-10-26-tlv5620-load-timing.md) |
 | **串口帧偶发错位**（上位机数据每 N 帧整体偏移一个通道）| `SCIFFTX.TXFFST` 只有 **4 位**，FIFO 满 16 时读回 0 → "判断有空位"的写法会往满 FIFO 写、数据被静默丢弃。改回逐字节发送；用**帧头间隔分布**诊断（间隔不单一就是丢字节）。详见 §3.1 |

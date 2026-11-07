@@ -2,21 +2,20 @@
 # =====================================================================
 # ti_c2000_debug.ps1
 #   Two modes for TI C2000 in CCS: non-stop realtime read of an existing target,
-#   or the original build/load/run/read-back workflow.
+#   or the execution build/load/run workflow. Observation is always a later
+#   read-only call, including when a new program was just downloaded.
 #
 #   - auto-detects the CCS installation (registry / C:\ti / %USERPROFILE%\ti)
 #   - detects the XDS probe and fails fast & clearly when the board is absent
-#   - load/run through loadti.bat, or DSS when variables must be read back
+#   - load/run through loadti.bat; runtime read through non-stop DSS
 #
 #   Usage:
 #     ... ti_c2000_debug.ps1 -ProjectPath <proj> -Build -Run
-#     ... ti_c2000_debug.ps1 -ProjectPath <proj> -Build -Run -RunMs 2000 -ReadVars "g_cnt,EPwm1Regs.TBPRD"
-#     ... ti_c2000_debug.ps1 -ProjectPath <proj> -ReadOnly -ReadVars "EPwm1Regs.TBPRD"
+#     ... ti_c2000_debug.ps1 -ProjectPath <proj> -ReadOnly -ReadVars "g_cnt,EPwm1Regs.TBPRD"
 #
-#   -WaitFor / default readiness test: prefer a PERIPHERAL REGISTER (e.g. "EPwm1Regs.TBPRD == 14999",
-#   "SciaRegs.SCILBAUD != 0").  loadProgram() does NOT clear .bss, so a global variable can already be
-#   non-zero from RAM leftovers and would report "ready" in 250 ms while the init code has not run yet
-#   (symptom: TBPRD / SCILBAUD still read 0).  The DSS template warns when ready comes that early.
+#   -WaitFor belongs to the later read-only call. Prefer a value that proves
+#   initialization completed (e.g. "EPwm1Regs.TBPRD == 14999"). A loose
+#   nonzero .bss value may be a leftover from an earlier RAM run.
 #     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #   Exit code: 0 OK | 1 failure | 2 environment/toolchain problem | 3 no probe
 # =====================================================================
@@ -46,7 +45,22 @@ function Out2($m) { Write-Output $m }
 function Info2($m) { if (-not $Quiet) { Write-Output $m } }
 
 # Reject incompatible arguments before a background process, build or loader
-# can start.  Without ReadVars the old flow fell through to loadti -l.
+# can start. Reading is always a separate non-stop realtime operation.
+if ($ReadVars -and -not $ReadOnly) {
+    if ($Build -or $Run -or $LoadOnly) {
+        Out2 "FAILURE: READ_REQUIRES_SEPARATE_READONLY"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: first build/download/run without -ReadVars; then read the running target with -ReadOnly -ReadVars"
+        exit 2
+    }
+    $ReadOnly = $true
+}
+if ($WaitFor -and -not $ReadVars) {
+    Out2 "FAILURE: WAIT_REQUIRES_READONLY"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: -WaitFor is a read condition; run the program first, then use -ReadOnly -ReadVars -WaitFor"
+    exit 2
+}
 if ($ReadOnly) {
     if ($Build -or $Run -or $LoadOnly) {
         Out2 "FAILURE: READONLY_MODE_CONFLICT"
@@ -75,15 +89,15 @@ if ($ReadOnly) {
         Out2 "REASON: read-only values must be simple symbol/field/constant-index paths; -WaitFor may compare them to paths or numbers with &&/||"
         exit 2
     }
-} elseif ($LoadOnly -and ($Run -or $ReadVars)) {
+} elseif ($LoadOnly -and $Run) {
     Out2 "FAILURE: MODE_CONFLICT"
     Out2 "RESULT: FAIL"
-    Out2 "REASON: -LoadOnly cannot be combined with -Run or -ReadVars"
+    Out2 "REASON: -LoadOnly cannot be combined with -Run"
     exit 2
 } elseif (-not $Build -and -not $Run -and -not $LoadOnly -and -not $ReadVars) {
     Out2 "FAILURE: ACTION_REQUIRED"
     Out2 "RESULT: FAIL"
-    Out2 "REASON: choose -Build, -Run, -LoadOnly, -ReadVars or -ReadOnly; no implicit load-only action"
+    Out2 "REASON: choose -Build, -Run, -LoadOnly or -ReadOnly -ReadVars; no implicit load-only action"
     exit 2
 }
 
@@ -195,7 +209,7 @@ if ($Build) {
         Out2 "REASON: build failed - debugger step aborted (see the build script output / its build.log)"
         exit 1
     }
-    if (-not $Run -and -not $LoadOnly -and -not $ReadVars) {
+    if (-not $Run -and -not $LoadOnly) {
         Out2 "NOTE    : build completed; no download or run requested"
         Out2 "RESULT: OK"
         exit 0
@@ -301,13 +315,9 @@ if ($ReadVars) {
     $js = Join-Path $env:TEMP ("ti_c2000_dss_{0}.js" -f (Get-Random))
     $body = Get-Content -LiteralPath $tpl -Raw
     if ($RunMs -le 0) { $RunMs = 8000 }   # upper bound for polling; DSP init with OLED/I2C can take seconds
-    # readiness expression: poll until the first requested value becomes non-zero,
-    # instead of blindly sleeping (reading too early returns all zeros)
+    # Optional readiness condition is polled in the running state. Without it,
+    # return the current values immediately; never insert a halt-based wait.
     $waitExpr = $WaitFor
-    if (-not $waitExpr -and -not $ReadOnly) {
-        $first = ($ReadVars -split ',')[0].Trim()
-        if ($first) { $waitExpr = "$first != 0" }
-    }
     function Escape-JsString([string]$value) {
         $escaped = $value.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n').Replace("`t", '\t')
         return [regex]::Replace($escaped, '[^\x00-\x7F]', {
@@ -319,12 +329,10 @@ if ($ReadVars) {
     $body = $body.Replace('{{OUT}}',   (Escape-JsString $OutFile))
     $body = $body.Replace('{{RUN_MS}}', [string]$RunMs)
     $body = $body.Replace('{{VARS}}',  (Escape-JsString $ReadVars))
-    $body = $body.Replace('{{MODE}}',  $(if ($ReadOnly) { 'readonly' } else { 'full' }))
     $body = $body.Replace('{{WAIT_EXPR}}', (Escape-JsString $waitExpr))
     $body = $body.Replace('{{SESSION_PATTERN}}', (Escape-JsString $CorePattern))
     $body | Set-Content -LiteralPath $js -Encoding ASCII
-    if ($ReadOnly) { Info2 "STEP    : DSS read-only values (no build/download, wait='$waitExpr')" }
-    else { Info2 "STEP    : DSS load/run/read (mode=full, budget=${RunMs}ms, wait='$waitExpr')" }
+    Info2 "STEP    : DSS read-only values (no build/download/halt, wait='$waitExpr')"
     # PowerShell 7 can fail before starting a .bat with
     # "StandardOutputEncoding is only supported when standard output is redirected".
     # Launch the CCS batch wrapper through cmd.exe; pass the two paths as separate
@@ -341,7 +349,6 @@ if ($ReadVars) {
     $varErrors = @($dout | Where-Object { $_ -match '^VAR .*<ERROR:' })
     $connFail = @($dout | Where-Object { $_ -match 'CONNECT_FAILED' })
     $readonlyIssue = @($dout | Where-Object { $_ -match '^READONLY_(STATE_ERROR|STATE_UNKNOWN|CONFIG_ERROR|SYMBOL_ERROR|VALUE_ERROR):' })
-    $fullRunError = @($dout | Where-Object { $_ -match '^FULL_RUN_ERROR:' })
     $timedOut = @($dout | Where-Object { $_ -match 'WAIT_TIMEOUT' })
     $readySeen = ($txt -match 'DSS: ready')
     $doneSeen  = ($txt -match 'DSS: done')
@@ -352,13 +359,6 @@ if ($ReadVars) {
         Out2 "FAILURE: READONLY_ACCESS_ERROR"
         Out2 "REASON: non-stop realtime read could not be completed; no program was built or downloaded"
         Out2 ($readonlyIssue | Select-Object -First 1)
-        Out2 "RESULT: FAIL"
-        exit 1
-    }
-    if (-not $ReadOnly -and $fullRunError.Count -gt 0) {
-        Out2 "FAILURE: TARGET_NOT_RUNNING"
-        Out2 "REASON: program load/read path could not verify that the target resumed"
-        Out2 ($fullRunError | Select-Object -First 1)
         Out2 "RESULT: FAIL"
         exit 1
     }
@@ -373,8 +373,7 @@ if ($ReadVars) {
     }
     if ($timedOut.Count -gt 0 -and -not $AllowNotReady) {
         Out2 "FAILURE: TIMEOUT"
-        if ($ReadOnly) { Out2 "REASON: condition not observed in read-only mode; no program was built or downloaded" }
-        else { Out2 "REASON: readiness condition not reached within $RunMs ms (program stuck/reset, wrong -WaitFor expression, or truly needs longer)" }
+        Out2 "REASON: condition not observed in read-only mode; no program was built or downloaded"
         Out2 "NOTE    : any VAR values printed above were sampled AFTER the timeout and may be invalid"
         Out2 ($timedOut | Select-Object -First 1)
         Out2 "HINT    : raise -RunMs / fix -WaitFor; use -AllowNotReady to read values anyway"
