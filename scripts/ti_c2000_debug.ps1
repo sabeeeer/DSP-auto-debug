@@ -1,8 +1,8 @@
 #requires -Version 7.0
 # =====================================================================
 # ti_c2000_debug.ps1
-#   Automatic "build -> load into debugger -> run -> read back" for
-#   TI C2000 / DSP2833x in Code Composer Studio (CCS12 preferred, CCS6 ok).
+#   Two modes for TI C2000 in CCS: read-only snapshot of an existing target,
+#   or the original build/load/run/read-back workflow.
 #
 #   - auto-detects the CCS installation (registry / C:\ti / %USERPROFILE%\ti)
 #   - detects the XDS probe and fails fast & clearly when the board is absent
@@ -44,6 +44,23 @@ param(
 $ErrorActionPreference = 'Continue'
 function Out2($m) { Write-Output $m }
 function Info2($m) { if (-not $Quiet) { Write-Output $m } }
+
+# Reject incompatible arguments before a background process, build or loader
+# can start.  Without ReadVars the old flow fell through to loadti -l.
+if ($ReadOnly) {
+    if ($Build -or $Run -or $LoadOnly) {
+        Out2 "FAILURE: READONLY_MODE_CONFLICT"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: -ReadOnly cannot be combined with -Build, -Run or -LoadOnly"
+        exit 2
+    }
+    if ([string]::IsNullOrWhiteSpace($ReadVars)) {
+        Out2 "FAILURE: READONLY_NEEDS_READVARS"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: -ReadOnly requires -ReadVars; no program will be loaded"
+        exit 2
+    }
+}
 
 # ---------- 0. detached mode ----------
 # A big application may need minutes before its registers settle; an IDE/agent
@@ -157,6 +174,9 @@ if ($Build) {
 if (-not $OutFile) { $OutFile = Join-Path $ProjectPath "Debug\$projName.out" }
 if (-not (Test-Path -LiteralPath $OutFile)) {
     Out2 "FAILURE: NO_OUT_FILE"
+    if ($ReadOnly) {
+        Out2 "RESULT: FAIL"; Out2 "REASON: $OutFile not found - provide an existing .out matching the running firmware; read-only mode will not build or download"; exit 2
+    }
     Out2 "RESULT: FAIL"; Out2 "REASON: $OutFile not found - run the build first (add -Build)"; exit 2
 }
 if (-not $Ccxml) {
@@ -190,16 +210,36 @@ if (-not (Test-Path $loadti)) {
         if (Test-Path $c) { $loadti = $c; $dss = Join-Path $r.Path 'ccs_base\scripting\bin\dss.bat'; break }
     }
 }
-if (-not (Test-Path $loadti)) { Out2 "FAILURE: ENV_NO_LOADTI"; Out2 "RESULT: FAIL"; Out2 "REASON: loadti.bat not found under any CCS installation"; exit 2 }
+if ($ReadOnly) {
+    if (-not (Test-Path -LiteralPath $dss)) { Out2 "FAILURE: ENV_NO_DSS"; Out2 "RESULT: FAIL"; Out2 "REASON: dss.bat not found under any CCS installation"; exit 2 }
+} elseif (-not (Test-Path -LiteralPath $loadti)) {
+    Out2 "FAILURE: ENV_NO_LOADTI"; Out2 "RESULT: FAIL"; Out2 "REASON: loadti.bat not found under any CCS installation"; exit 2
+}
 Info2 "OUTCARD : $OutFile"
 Info2 "CCXML   : $Ccxml"
-Info2 "LOADTI  : $loadti"
+if ($ReadOnly) { Info2 "DSS     : $dss (symbols only)" }
+else { Info2 "LOADTI  : $loadti" }
 
 # ---------- 4. probe / GUI pre-flight ----------
 # probe detection covers TI XDS family (XDS100/110/200/510/560), Spectrum Digital,
 # Blackhawk, SEGGER J-Link and other JTAG probes that ccxml files can reference
 $probePatterns = 'XDS|Texas Instruments.*(Debug|Emulat|Probe)|Debug Probe|Spectrum Digital|Blackhawk|SEGGER|J-Link|ICDI'
-$probe = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $probePatterns })
+$probe = @()
+if (-not $isSim -and -not $NoProbeCheck) {
+    try {
+        $probe = @(Get-CimInstance Win32_PnPEntity -ErrorAction Stop 2>$null |
+                   Where-Object { $_.Name -match $probePatterns })
+    } catch { $probe = @() }
+    # Some Windows installations reject Win32_PnPEntity even though the USB
+    # emulator is usable. CCS's own enumerator is authoritative for XDS100.
+    if ($probe.Count -eq 0) {
+        $xdsTool = Join-Path $ccs.Path 'ccs_base\common\uscif\xds100serial.exe'
+        if (Test-Path -LiteralPath $xdsTool) {
+            $xdsRows = @(& $xdsTool -l 2>$null | Where-Object { $_ -match '^[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\s+XDS100' })
+            foreach ($row in $xdsRows) { $probe += [pscustomobject]@{ Name = $row.Trim() } }
+        }
+    }
+}
 if ($isSim) {
     Info2 "PROBE   : skipped (simulator target, no hardware needed)"
     $probe = @([pscustomobject]@{ Name = 'TI simulator' })
@@ -221,7 +261,7 @@ if (@(Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue).
     Info2 "WARN    : CCS GUI is running - close any active debug session if the JTAG turns out to be busy"
 }
 
-# ---------- 5a. DSS path: load + run + halt + read variables ----------
+# ---------- 5a. DSS path: read-only values or full load/run/read ----------
 if ($ReadVars) {
     if (-not (Test-Path $dss)) { Out2 "RESULT: FAIL"; Out2 "REASON: dss.bat not found at $dss"; exit 2 }
     $tpl = Join-Path $PSScriptRoot 'dss_template.js'
@@ -244,8 +284,14 @@ if ($ReadVars) {
     $body = $body.Replace('{{WAIT_EXPR}}', $waitExpr)
     $body = $body.Replace('{{SESSION_PATTERN}}', $CorePattern)
     $body | Set-Content -LiteralPath $js -Encoding ASCII
-    Info2 "STEP    : DSS load/run/read (mode=$(if ($ReadOnly) { 'readonly' } else { 'full' }), budget=${RunMs}ms, wait='$waitExpr')"
-    $dout = & $dss $js 2>&1
+    if ($ReadOnly) { Info2 "STEP    : DSS read-only values (no build/download, wait='$waitExpr')" }
+    else { Info2 "STEP    : DSS load/run/read (mode=full, budget=${RunMs}ms, wait='$waitExpr')" }
+    # PowerShell 7 can fail before starting a .bat with
+    # "StandardOutputEncoding is only supported when standard output is redirected".
+    # Launch the CCS batch wrapper through cmd.exe; pass the two paths as separate
+    # arguments so PowerShell adds the quotes (a pre-quoted single string gets its
+    # inner quotes escaped as \" by PS7 and cmd.exe then fails to parse it).
+    $dout = & cmd.exe /d /c $dss $js 2>&1
     $dcode = $LASTEXITCODE
     if (-not $Quiet) { $dout | ForEach-Object { Out2 $_ } }
     Remove-Item -LiteralPath $js -Force -ErrorAction SilentlyContinue
@@ -255,12 +301,20 @@ if ($ReadVars) {
     $jsErr    = @($dout | Where-Object { $_ -notmatch '^VAR ' -and $_ -notmatch '\(poll\)' -and $_ -match 'uncaught JavaScript|JavaScript runtime|TypeError|Cannot find function|SEVERE|ScriptingException' })
     $varLines = @($dout | Where-Object { $_ -match '^VAR ' -and $_ -notmatch '<ERROR' })
     $connFail = @($dout | Where-Object { $_ -match 'CONNECT_FAILED' })
+    $readonlyStateError = @($dout | Where-Object { $_ -match '^READONLY_STATE_(ERROR|UNKNOWN):' })
     $timedOut = @($dout | Where-Object { $_ -match 'WAIT_TIMEOUT' })
     $readySeen = ($txt -match 'DSS: ready')
     $doneSeen  = ($txt -match 'DSS: done')
 
     # failure classification - every failure must be named explicitly
     $connectedSeen = ($txt -match 'DSS: connected')
+    if ($ReadOnly -and $readonlyStateError.Count -gt 0) {
+        Out2 "FAILURE: READONLY_STATE_ERROR"
+        Out2 "REASON: read-only snapshot could not preserve the observed target run state"
+        Out2 ($readonlyStateError | Select-Object -First 1)
+        Out2 "RESULT: FAIL"
+        exit 1
+    }
     if ($connFail.Count -gt 0 -or -not $connectedSeen -or ($dcode -ne 0 -and -not $readySeen -and -not $doneSeen)) {
         Out2 "FAILURE: CONNECT_FAILED"
         Out2 "REASON: no debug session could be opened/used (invalid ccxml? JTAG busy in the CCS GUI? board not powered? wrong core?)"
@@ -272,7 +326,8 @@ if ($ReadVars) {
     }
     if ($timedOut.Count -gt 0 -and -not $AllowNotReady) {
         Out2 "FAILURE: TIMEOUT"
-        Out2 "REASON: readiness condition not reached within $RunMs ms (program stuck/reset, wrong -WaitFor expression, or truly needs longer)"
+        if ($ReadOnly) { Out2 "REASON: condition not observed in read-only mode; no program was built or downloaded" }
+        else { Out2 "REASON: readiness condition not reached within $RunMs ms (program stuck/reset, wrong -WaitFor expression, or truly needs longer)" }
         Out2 "NOTE    : any VAR values printed above were sampled AFTER the timeout and may be invalid"
         Out2 ($timedOut | Select-Object -First 1)
         Out2 "HINT    : raise -RunMs / fix -WaitFor; use -AllowNotReady to read values anyway"
@@ -298,6 +353,10 @@ else           { $ltArgs += '-l' }
 $ltArgs += "-t=$($TimeoutSec * 1000)"
 $ltArgs += $OutFile
 Info2 ("STEP    : loadti {0}" -f ($ltArgs -join ' '))
+# ★不要把参数拼成一个字符串交给 cmd /c：PowerShell 7 调用原生 exe 时会按 C 运行库规则
+#   把内嵌引号转义成 \"，而 cmd.exe 不认反斜杠转义 —— 工程路径一旦含空格（如 "...\Working Folder"）
+#   就会得到  '""F:\...\loadti.bat" "-c' is not recognized as an internal or external command，
+#   并被误判成 LOADTI_TIMEOUT。直接以数组传参给 .bat，由 PowerShell 负责加引号。
 $out = & $loadti @ltArgs 2>&1
 $code = $LASTEXITCODE
 if (-not $Quiet) { $out | Select-Object -Last 25 | ForEach-Object { Out2 $_ } }

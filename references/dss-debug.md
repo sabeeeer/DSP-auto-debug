@@ -43,13 +43,13 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 `ti_c2000_debug.ps1` 填好后写到临时文件再执行：
 
 - `MODE=full`：`loadProgram` → `target.restart()` → **轮询就绪** → `halt` → 读表达式 → 继续运行 → 断开
-- `MODE=readonly`：只 `symbol.load()`（不写内存、不复位）→ `halt` → 读 → 继续运行（用于程序已由 loadti 跑起来、只想读值）
+- `MODE=readonly`：只 `symbol.load()` 解析已有固件符号（不编译、下载）→ 必要时短暂停核 → 读数据值 → 恢复连接时观察到的运行/暂停状态；具体入口见[只读模式](read-only-mode.md)。
 
 ### 就绪轮询（重要）
 
-跑完立刻读会拿到 0（本工程 OLED 模拟 I2C 初始化要 ~3.25 s）。模板因此**每 250 ms 停机采样一次就绪表达式**，
-表达式为 `{{WAIT_EXPR}}`，由 PS1 生成：默认取 `-ReadVars` 的第一项 `!= 0`，也可用 `-WaitFor "<expr>"` 指定（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`）。
-命中即打印 `DSS: ready ('...') after N ms` 再正式读值；到预算（默认 8000 ms，`-RunMs` 可改）仍未命中会打印 WARNING 并照常读回。
+原模式跑完立刻读可能拿到 0（本工程 OLED 模拟 I2C 初始化要 ~3.25 s）。模板因此可**每 250 ms 停机采样一次就绪表达式**。
+原模式默认取 `-ReadVars` 的第一项 `!= 0`，也可用 `-WaitFor "<expr>"` 指定（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`）；只读模式默认直接取当前值，需要等待已有程序状态时显式传 `-WaitFor`，全程不编译或下载。
+命中即打印 `DSS: ready ('...') after N ms` 再正式读值；到预算（默认 8000 ms，`-RunMs` 可改）仍未命中会打印 `WAIT_TIMEOUT` 并采样，脚本默认返回 `RESULT: FAIL`，这些值不能当成就绪后的证据。
 轮询用 `isHalted()` 做保护、静默捕获异常，不会污染失败判定。
 
 #### 判据怎么选（实测踩坑，2026-09 于 4-1Two_Level）
@@ -142,5 +142,5 @@ volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5
 ## 5. 会话卫生
 
 - 每次运行都新建/关闭 DSS 会话，脚本结束前 `disconnect()` + `server.stop()`，避免占用 JTAG 影响 CCS GUI。
-- `-ReadOnly` 模式不动目标内存，适合"程序正在跑，只想采样变量"。
-- 读回采样点：先 `halt()` 再 `evaluate`，读完 `runAsynch()` 恢复运行；要观察变化可连续多次采样。
+- `-ReadOnly` 模式不编译、不下载；已有 `.out` 只给调试器加载符号。适合“程序已在板上，只想读取数值”。
+- 读回采样点：目标运行时短暂停核后 `evaluate`，读完恢复；若连接时已暂停则保持暂停。要观察变化可连续多次采样。连接和停核本身可能影响实时性。

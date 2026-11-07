@@ -58,6 +58,17 @@ try {
     throw "connect failed";       // aborts the session; the caller reports FAILURE: CONNECT_FAILED
 }
 print("DSS: connected (mode=" + MODE + ", core='" + "{{SESSION_PATTERN}}" + "')");
+var readonlyWasHalted = null;
+if (MODE === "readonly") {
+    try { readonlyWasHalted = session.target.isHalted(); }
+    catch (e) {
+        print("READONLY_STATE_UNKNOWN: " + e);
+        tryCall("disconnect", function () { session.target.disconnect(); });
+        tryCall("server.stop", function () { server.stop(); });
+        throw "cannot preserve target run state in read-only mode";
+    }
+    print("DSS: target at connect was " + (readonlyWasHalted ? "halted" : "running"));
+}
 
 if (MODE === "full") {
     session.memory.loadProgram(OUT);
@@ -115,10 +126,49 @@ if (MODE === "full") {
     // readonly: load SYMBOLS ONLY (no memory write, no reset) so expressions resolve
     // while a program already running on the target keeps going.
     tryCall("symbol.load()", function () { session.symbol.load(OUT); });
-    print("DSS: symbols loaded (readonly, target untouched)");
+    print("DSS: symbols loaded (readonly, no program download)");
+    if (WAIT_EXPR.length > 0) {
+        var roBudget = RUN_MS > 0 ? RUN_MS : 5000;
+        var roWaited = 0;
+        var roReady = false;
+        if (readonlyWasHalted) {
+            try { roReady = ("" + session.expression.evaluate(WAIT_EXPR)) !== "0"; } catch (e5) { roReady = false; }
+            if (roReady) { print("DSS: ready ('" + WAIT_EXPR + "') on halted target"); }
+        } else {
+            while (roWaited < roBudget) {
+                sleepMs(250); roWaited += 250;
+                try { if (!session.target.isHalted()) { session.target.halt(); } }
+                catch (e6) { print("READONLY_STATE_ERROR: halt during wait failed: " + e6); break; }
+                try { roReady = ("" + session.expression.evaluate(WAIT_EXPR)) !== "0"; }
+                catch (e7) { roReady = false; }
+                if (roReady) {
+                    print("DSS: ready ('" + WAIT_EXPR + "') after " + roWaited + " ms");
+                    break;
+                }
+                try { session.target.runAsynch(); }
+                catch (e8) { print("READONLY_STATE_ERROR: resume during wait failed: " + e8); break; }
+            }
+        }
+        if (!roReady) {
+            print("WAIT_TIMEOUT: '" + WAIT_EXPR + "' not reached" +
+                  (readonlyWasHalted ? " on halted target" : " within " + roWaited + " ms"));
+        }
+    }
 }
 
-tryCall("halt()", function () { session.target.halt(); });
+if (MODE === "readonly" && !readonlyWasHalted) {
+    var roHaltOk = true;
+    try { if (!session.target.isHalted()) { session.target.halt(); } }
+    catch (e9) { roHaltOk = false; }
+    if (!roHaltOk) {
+        print("READONLY_STATE_ERROR: could not halt for snapshot");
+        tryCall("disconnect", function () { session.target.disconnect(); });
+        tryCall("server.stop", function () { server.stop(); });
+        throw "read-only halt failed";
+    }
+} else if (MODE !== "readonly") {
+    tryCall("halt()", function () { session.target.halt(); });
+}
 print("DSS: halted - reading expressions");
 for (var i = 0; i < VARS.length; i++) {
     var name = VARS[i].replace(/^\s+|\s+$/g, "");
@@ -131,7 +181,15 @@ for (var i = 0; i < VARS.length; i++) {
     }
 }
 
-tryCall("resume", function () { session.target.runAsynch(); });
+if (MODE === "readonly" && !readonlyWasHalted) {
+    if (!tryCall("resume", function () { session.target.runAsynch(); })) {
+        print("READONLY_STATE_ERROR: could not resume after snapshot");
+    }
+} else if (MODE !== "readonly") {
+    tryCall("resume", function () { session.target.runAsynch(); });
+} else {
+    print("DSS: target left halted (read-only entry state preserved)");
+}
 tryCall("disconnect", function () { session.target.disconnect(); });
 tryCall("server.stop", function () { server.stop(); });
 print("DSS: done");

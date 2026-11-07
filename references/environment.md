@@ -34,6 +34,13 @@
   `GPADIR.bit.GPIO8=1`(OLED 初始化已执行)、`GPAMUX1.bit.GPIO0=1`(EPWM1A 复用已配置)、`SCILBAUD=39`(115200bps)
   → 与 `User/main.c` 逐项吻合。
 - **无仿真器时**：`ti_c2000_debug.ps1` 会打印 `PROBE : NOT FOUND` + 中文提示并返回退出码 3。
+- **F28379D + XDS100v2 实机闭环（2026-10-10 实测成功）**：
+  CCS12.8.1 + `f28379d.xml` 目标定义 + XDS100v2 序列号 `TI90I42A`；
+  `F2837xD_Device.h` bitfield 例程完成 `build -> download -> reset -> run`，
+  连续测试 12 个官方 bitfield 例程全部 `RESULT: OK`。
+  关键排错：使用例程自带的 F28377D ccxml 会报 `-1265`；
+  串号字段格式不对会报 `-151`；目标定义/串号不匹配时出现过 `-2131`。
+  正确 ccxml 写法见 `other-devices-and-probes.md` §3.2。
 
 ## 已知坑（都踩过）
 

@@ -1,7 +1,7 @@
 # 其他 C2000 型号 与 其他仿真器
 
 > 本文件说明本 skill 的**通用程度**：哪些是自动适配的、哪些必须手动给参数。
-> 已在 **DSP28335 + XDS100 + CCS12.8/CCS6** 上实测；下表其他型号的差异点来自 TI 官方结构惯例，**换型号首次使用请先跑一次编译自检再做调试**。
+> 已有 **DSP28335 + XDS100v2（旧工程）**、**DSP28335 + XDS100v1（`2-1SOGI_PLL`）** 和 **F28379D + XDS100v2** 的板级记录。不同板卡分别核对探针；下表其他型号的差异点来自 TI 官方结构惯例，**换型号首次使用请先跑一次编译自检再做调试**。
 
 ## 1. 自动适配的部分（换型号通常不用改脚本）
 
@@ -100,9 +100,116 @@ ccxml 决定用哪种连接，`.ccsproject` 是工程级记录。改完跑 `ti_c
 确认打印的 `TARGET: ...` 与手里的探针一致即可。
 `ti_c2000_debug.ps1` 本身不用动（默认取 `targetConfigs\` 下第一个 ccxml，或 `-Ccxml <文件>`）。
 
+**★`-151` 先查"选中的是哪一块探针"，再查硬件（2026-11-06 实测，本机 4-1 工程踩过一整轮）**：
+
+- 症状组合（很有迷惑性，会让人以为是线/供电/驱动坏了）：
+  `xds100serial`（带不带 `-l` 都一样）报 `No XDS100 emulators were found`；
+  DSS 报 `Error -151 / SC_ERR_FTDI_OPEN`，`dbgjtag` 停在 `soft opening the controller`；
+  但设备管理器三路设备全 `OK`、`Problem = CM_PROB_NONE`，驱动 `2.12.28.0 / Texas Instruments` 正常。
+- 真因：`.ccxml` 用的是 targetdb 默认的
+  `<property ... id="Emulator Selection" Value="0">`（= **Only one XDS100 installed**）。
+  本机历史上插过多块 XDS100，`Get-PnpDevice` 里留着一串 `Unknown / Present=False` 的幽灵实例；
+  `Only one` 会打开到不可用的那个 → D2XX 打不开 → `-151`。
+- 解法：ccxml 里**显式按串号选**（串号取 `xds100serial` 的输出；`Get-PnpDevice` 的 InstanceId 末尾会多一位，
+  例如 `TI1P9CM8B`，不能直接填）：
+  ```xml
+  <property Type="choicelist" Value="1" id="Emulator Selection">
+      <choice Name="Select by serial number" value="0">
+          <property Type="stringfield" Value="TI1P9CM8" id="-- Enter the serial number"/>
+      </choice>
+  </property>
+  ```
+- 判据：改完 `TARGET:` 行不变（仍是同版本探针），但连接立刻成功（`VAR ... RESULT: OK`）。
+- **顺序很重要**：`-151` 按「① 按串号指定探针 → ② 换 USB 线/口 → ③ 查供电 → ④ 查驱动」
+  走，别一上来就怀疑线缆。`ti_c2000_set_probe.ps1` 只改版本（两处），**不会**帮你按串号指定。
+
 **改对了仍报 `-151/-1135` 才去查硬件**：拔插探针 USB（错误里的 "reset the debug probe"；正常会枚举
 **3 个设备**：`XDS100 Class USB Serial Port (COMx)` + `Debug Port` + `Auxiliary Port`，少了串口那路就是异常）
 → 查 JTAG 排线/板子供电 → 再怀疑 CCS 调试会话占用、USB 线/探针硬件。
+
+**★实测症状演变（2026-11-06，DSP28335 + 实物 XDS100v2）** —— 用来判断"配置到底改对没有"：
+
+| 操作 | 报错 | 说明 |
+|---|---|---|
+| 只手改 ccxml 的 `desc`/`id`（**href/xml 仍指 v1 的 `TIXDS100usb_Connection.xml`**，`.ccsproject` 没动） | **`-1135`** | 配置自相矛盾：声明 v2、加载 v1 定义 |
+| 用 `ti_c2000_set_probe.ps1 -Probe v2` 一次改齐两处 | **`-1015`** | ★**错误码变了就说明配置对了** |
+| 继续处理 `-1015` | — | 芯片侧问题，按 TI 原文：**wait in reset（按住 RESET）→ power-cycle → 降 TCLK** |
+
+> 判据：`-1135` 还在 = 配置文件没改全（尤其 `href`/`xml`/`.ccsproject` 三处容易漏）；
+> 变成 `-1015` = 配置已正确，转去查芯片/复位/JTAG 速率。
+
+### 3.2 F28379D + XDS100v2 本机实测（2026-10-10）
+
+本机最终成功组合：
+
+```text
+CCS12.8.1
+Board:  TMS320F28379D
+Probe:  XDS100v2
+Serial: TI90I42A
+Target: f28379d.xml
+CPU1:   Subpath_0 / Port Number 0x10
+```
+
+`xds100serial.exe` 的实际输出是唯一可信串号来源。即使 Windows
+`DeviceID` 末尾还可能多一个字符，也应以 `xds100serial` 打印值为准。
+本次 PnP DeviceID 为 `...TI90I42AB...`，但 CCS 能连接的串号是
+`TI90I42A`。
+
+### 版本（v1/v2）同样不能靠 USB PID 判断
+
+`VID_0403&PID_A6D0` 是 **XDS100 系列共用**的 FTDI PID，v1 和 v2 都用它；
+`xds100serial.exe -l` 的 `Type` 列本身就打印 `XDS100v1/v2`，等于"无法区分"。
+
+识别这个探针时应结合 `Description` 里的 `Vx.x`、板卡信息及目标配置，不能只看 USB PID。例如本机这块 DSP28335 板读到：
+
+```
+VID/PID    Type            Serial #    Description
+0403/a6d0  XDS100v1/v2     TI1P9CM8    Texas Instruments XDS100+RS232 V1.0
+```
+
+→ 判断为 **v1**，与 `.ccxml` 的 `desc="Texas Instruments XDS100v1 USB Emulator"` 一致，不需要改。
+
+**反例（2026-10-27）**：仅凭 `PID_A6D0` 推断成 v2 并建议改 `.ccxml`，是错的。
+两种版本同 PID、同驱动族，CCS 都能连，但 TCK 上限不同；版本写错不会连不上，
+只是跑在较低速率上，所以更容易被忽略。
+
+正确的 `Emulator Selection` 写法：
+
+```xml
+<property Type="choicelist" Value="1" id="Emulator Selection">
+    <choice Name="Select by serial number" value="0">
+        <property Type="stringfield" Value="TI90I42A" id="-- Enter the serial number"/>
+    </choice>
+</property>
+```
+
+注意：
+
+- 不要沿用官方 28377D 例程自带的 `TMS320F28377D.ccxml`；本次实测会报
+  `IcePick_C_0 Error -1265: Device ID is not recognized`。
+- `f28379d.xml` 的 CPU1 默认端口是 `Subpath_0 / 0x10`，不是 28377D
+  里的 `Subpath_1 / 0x11`。
+- 串号字段只改数值不够；字段结构必须用上面的 `Value="1"` +
+  `id="-- Enter the serial number"`。字段名写成 `SEPK.POD_SERIAL`
+  时本次实测报 `Error -151`。
+- 默认 1 MHz TCLK 可在本机 F28379D 上工作；`Error -2131` 时先确认目标
+  上电/复位状态，再确认 serial 是否真的匹配，不要只盲目降 TCLK。
+
+成功时 `loadti` 输出包含：
+
+```text
+Connecting to target...
+C28xx_CPU1: GEL Output:
+Memory Map Initialization Complete
+Loading ...blinky_cpu01.out
+Done
+Target running...
+RESULT: OK
+```
+
+本次用该组合连续下载运行 12 个官方 bitfield 例程（GPIO/Timer/EPWM/
+ADC/SCI/SPI/watchdog/eCAP 等），全部 `RESULT: OK`。
 
 ## 4. 双核 / 多核器件怎么办
 

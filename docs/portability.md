@@ -44,7 +44,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Targ
 
 | 能力 | CodeBuddy | 其他 agent |
 |---|---|---|
-| skill 自动加载 | 按 `description` 匹配，自动加载 | Codex 需要显式调用（如 `$skill` 或提到技能名）；Claude Code 按 `description` 自动加载 |
+| skill 自动加载 | 按 `description` 匹配，自动加载 | Codex 会依据技能名称和描述选择相关技能；关键任务可显式指定 `$ti-c2000-ccs-auto`。其他 agent 的触发方式按其实际环境确认。 |
 | git 快照 hooks | 有（由 `git-management` 这个 skill 提供） | **没有**，要自己写对应 agent 的 hook 机制 |
 | 工具名差异 | `use_skill` / `write_to_file` / `replace_in_file` | 各家不同；`SKILL.md` 里的自然语言指令不受影响 |
 
@@ -57,6 +57,10 @@ PowerShell、能读到 `SKILL.md`，就可用。
 
 ```markdown
 ## TI C2000 / CCS 工程（DSP2833x、F2837x 等）
+
+处理电网 PLL/SPLL/SOGI/SolarLib/Park/Clarke 前，先完整阅读
+`<skill>/references/spll-pll-algorithms.md`，检查工程已有 SolarLib 与适配层，
+先说明可复用模块、相位约定、采样周期和系数；需要另写算法时说明现有实现不适用的原因。
 
 改任何 `.c/.h/.cproject` 后，必须跑一次编译链接自检，看到 `RESULT: OK` 才算通过：
   pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
@@ -77,7 +81,7 @@ CONNECT_FAILED / LOADTI_ERROR / LOADTI_TIMEOUT / NO_PROBE / NO_OUT_FILE / ENV_*�
    `cannot open source file "DSP2833x_Device.h"`；脚本会先打 `WARNING : include path missing on disk`。
 3. **Windows + PowerShell 7.0+（pwsh）**：脚本首行 `#requires -Version 7.0`；仍保持纯 ASCII（历史约定 + 避免编码坑）。
    注意 `Get-WmiObject` 在 7.x 已移除，枚举仿真器用 `Get-CimInstance`。
-4. 上板还需要仿真器驱动（XDS100/110/200/510/560、J-Link 等）；目前硬件实测只覆盖 DSP28335 + XDS100。
+4. 上板还需要仿真器驱动（XDS100/110/200/510/560、J-Link 等）；本技能的硬件实测记录覆盖 DSP28335 + XDS100v2 和 F28379D + XDS100v2。
 
 ## 6. 迁移后自检
 

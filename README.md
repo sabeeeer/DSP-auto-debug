@@ -1,10 +1,16 @@
 # DSP 自动调试（CodeBuddy Skill）
 
+> [!WARNING]
+> GitHub 不能恢复 CCS、编译器、探针、目标板、驱动和许可证。
+> 详见 [`IRREPLACEABLE.md`](IRREPLACEABLE.md)。
+
 > TI C2000 / DSP2833x 在 **CCS12 / CCS6** 上的全自动开发 + 调试闭环：
 > 写代码 → 自动编译链接自检（不用打开 CCS 界面）→ 自动下载进调试器运行 → 读回寄存器/变量 → 失败自动分类并给出原因。
 
-已在 **DSP28335 + XDS100 + CCS12.8.1（ti-cgt-c2000_22.6.1.LTS）** 上完成硬件实测；
-CCS6（ti-cgt-c2000_15.12.1.LTS）完成编译链接实测。
+技能入口分为三类：**器件与 CCS 工程**、**TI 库与算法**、**调试经验**。先从 `SKILL.md` 选入口，再按需读对应参考文件；以后新增型号、库或故障案例也按这三类维护。
+
+已在 **DSP28335 + XDS100v2** 和 **F28379D + XDS100v2** 上完成 CCS12.8.1 硬件实测；
+DSP28335 工程另用 CCS6（ti-cgt-c2000_15.12.1.LTS）完成编译链接实测。
 
 ---
 
@@ -23,9 +29,17 @@ CCS6（ti-cgt-c2000_15.12.1.LTS）完成编译链接实测。
 ## 2. 目录结构
 
 ```
-SKILL.md                          # 主文件：触发条件、铁律、SOP、防错清单、失败分类
+SKILL.md                          # 任务路由与核心验证规则（按需打开下面的资料）
 README.md                         # 本文件
 references/
+  device-platform.md              # 器件、探针、外设、工程与链接入口
+  ti-algorithm-libraries.md       # C2000Ware/其他 TI 库与算法入口
+  debugging-experience.md         # 调试经验与故障复盘入口
+  debug-cases/CASE-TEMPLATE.md     # 新故障的独立案例模板；索引在 debugging-experience.md
+  field-guide.md                 # 原主文件的详细命令、SOP 与报错对照
+  spll-pll-algorithms.md         # SolarLib PLL/SOGI/坐标变换与移植
+  solarlib-catalog.md            # SolarLib v1.2 全库模块入口（MPPT/控制/测量/变换/PLL）
+  c28x-pitfalls.md               # ADC/SPI/SCI、控制算法与并发问题
   environment.md                  # 本机实测环境、已验证项、踩过的坑
   project-map.md                  # 工程结构、模块接口、引脚占用表
   dss-debug.md                    # loadti / DSS 用法与排错、长时调试
@@ -83,10 +97,18 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps
   -ReadVars "EPwm1Regs.TBPRD,EPwm1Regs.CMPA.all,SciaRegs.SCILBAUD"
 
 # ④ 5 分钟级长调试，后台跑
-powershell ... -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 状态表达式" -ReadVars "..." -Background
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 状态表达式" -ReadVars "..." -Background
 ```
 
 判定只看输出里的 `RESULT: OK` / `RESULT: FAIL`。
+
+安装器和仓库自检：
+
+```powershell
+pwsh -NoProfile -File .\tests\test_setup_failure.ps1
+```
+
+该测试要求安装失败时输出 `RESULT: FAIL` 并返回非 0。
 
 ## 6. 常用参数
 
@@ -108,11 +130,11 @@ powershell ... -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 
 
 ## 7. 已验证 / 未验证
 
-**已实测**：DSP28335 + XDS100 + CCS12.8.1；编译链接用 CCS6 的 15.12.1.LTS 与 CCS12 的 22.6.1.LTS 均通过；
-读回值与源码逐项吻合（`TBPRD=65535`、`CMPA=0xCCCC=52428`、`CLKDIV=3`、`SCILBAUD=39`）。
+**已上板实测**：DSP28335 + XDS100v2 + CCS12.8.1，读回值与源码吻合（`TBPRD=65535`、`CMPA=0xCCCC=52428`、`CLKDIV=3`、`SCILBAUD=39`）；F28379D + XDS100v2 + CCS12.8.1 完成构建、下载、复位、运行，并连续验证 12 个官方 bitfield 例程。证据与配置见 `references/environment.md` 和 `references/other-devices-and-probes.md` §3.2。
 
-**未实测**：其他 C2000 型号（F2802x/F2806x/F2837x/F28004x/F2838x…）与其他仿真器，脚本按 TI 通用结构自动适配，
-首次使用请先跑编译自检，再上调试器。
+**编译链接实测**：DSP28335 工程使用 CCS6 的 15.12.1.LTS 与 CCS12 的 22.6.1.LTS 均通过。
+
+**尚无本技能上板记录**：F2802x、F2806x、F28004x、F2838x，以及 F2837x 家族中除 F28379D 外的型号。首次使用请先跑编译自检，再核对目标配置和硬件行为。
 
 ## 8. 注意
 

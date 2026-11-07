@@ -5,11 +5,7 @@
 > （自动下载到 `%LOCALAPPDATA%\c2000ware-snapshot` 缓存）。本文件里的相对路径（`device_support\...`、
 > `libraries\...`）在任何来源下都一样，**根目录以脚本打印的 `SOURCE:` 行为准**。
 >
-> **固定动作**（写任何"某功能"的 DSP 代码前，按顺序做）：
-> ① 跑 `scripts\c2000ware_find.ps1 -Keyword "<关键词>"` 定位官方例程 / 库；
-> ② 查本文件 §4「我要做 X」速查表；
-> ③ 打开命中的 `examples\`，**照它的初始化顺序 / API / 中断写法写**；
-> ④ 找不到就先问用户，**不许凭印象发明寄存器用法**。
+> 写外设配置时按[同器件例程模板规则](peripheral-examples.md)办理：用 `list_peripheral_examples.ps1` 列全候选，选同器件/核/模式的源码及工程配置，核对初始化顺序、API、中断和板级引脚。`c2000ware_find.ps1` 适合库/API 广泛搜索，默认只展示前 30 条，不能据此断言某例程不存在。查不到时继续核对器件能力、别名、实际 SDK 目录和手册，再说明缺口；不要凭印象发明寄存器用法。
 >
 > SDK 宏观用法（bitfield vs driverlib、cmd、SysConfig、仿真器）见 `c2000ware-guide.md`。
 

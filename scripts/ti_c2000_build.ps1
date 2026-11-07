@@ -120,6 +120,11 @@ if (Test-Path (Join-Path $ProjectPath '.project')) {
         if ($prj.projectDescription.name) { $projName = $prj.projectDescription.name }
     } catch { }
 }
+# .project is untrusted input. Strip any path separators / traversal fragments before
+# using the name in temp paths or recursive cleanup operations.
+$projName = [IO.Path]::GetFileName([string]$projName)
+$projName = [regex]::Replace($projName, '[^A-Za-z0-9._-]+', '_').Trim('.', '_')
+if ([string]::IsNullOrWhiteSpace($projName)) { $projName = 'project' }
 # ---- pick the build configuration whose options are used ----
 # A .cproject may declare several configurations (Debug / Release / F2837xD_CPU1 ...) plus a
 # <refreshScope> block that also contains <configuration> nodes but has no @id - those must not
@@ -215,7 +220,7 @@ if ((Get-OptionValue 'linkerID.RAM_MODEL') -eq 'true') { $romModel = '--ram_mode
 # ---- the rest of the project's switches, so exactly the same code paths get compiled ----
 # (without -D the #ifdef FLASH / #ifdef PC_COMMU_ENABLE ... branches are compiled differently
 #  from CCS and the check would validate something the board never runs)
-$defines = @(Get-OptionList 'compilerID.DEFINE')
+$defines = @(Get-OptionList 'compilerID.DEFINE' | ForEach-Object { ([string]$_).Trim('"') })
 $optLevel = ''
 $v = Get-OptionValue 'compilerID.OPT_LEVEL'
 if ($v -match 'OPT_LEVEL\.(\d+)\s*$') { $optLevel = "-O" + $Matches[1] }
@@ -267,19 +272,65 @@ if (-not $cgRoot) { Fail "no TI C2000 codegen tools found (check your CCS instal
 $cl2000 = Join-Path $cgRoot 'bin\cl2000.exe'
 if (-not (Test-Path $cl2000)) { Fail "cl2000.exe not found under $cgRoot" 2 'ENV_NO_COMPILER' }
 
+# CCS SDK examples often declare INSTALLROOT_* macros and linked sources in .project.
+# Resolve them before parsing includes, sources and linker inputs. Ordinary self-contained
+# projects keep using the existing paths below.
+$ccsMacros = @{
+    PROJECT_ROOT = $ProjectPath
+    ProjName = $projName
+    CG_TOOL_ROOT = $cgRoot
+}
+foreach ($node in $cproj.SelectNodes('//stringMacro[@name]')) {
+    $ccsMacros[[string]$node.name] = [string]$node.value
+}
+function Resolve-CcsPathValue([string]$value) {
+    $q = $value.Trim().Trim('"')
+    $q = $q.Replace('${workspace_loc:/${ProjName}}', $script:ProjectPath)
+    $q = $q.Replace('${workspace_loc:/${ProjName}/', ($script:ProjectPath + '\'))
+    for ($pass = 0; $pass -lt 8; $pass++) {
+        $before = $q
+        foreach ($key in $script:ccsMacros.Keys) {
+            $q = $q.Replace(('${' + $key + '}'), [string]$script:ccsMacros[$key])
+        }
+        if ($q -ceq $before) { break }
+    }
+    $q = $q.Replace('/', '\').TrimEnd('}')
+    if ($q -match '\$\{') { return $q }
+    if (-not [IO.Path]::IsPathRooted($q)) { $q = Join-Path $script:ProjectPath $q }
+    try { return [IO.Path]::GetFullPath($q) } catch { return $q }
+}
+foreach ($key in @($ccsMacros.Keys)) {
+    if ($key -notin @('PROJECT_ROOT', 'ProjName', 'CG_TOOL_ROOT')) {
+        $ccsMacros[$key] = Resolve-CcsPathValue ([string]$ccsMacros[$key])
+    }
+}
+$linkedFiles = @()
+$projectMetadata = Join-Path $ProjectPath '.project'
+if (Test-Path -LiteralPath $projectMetadata) {
+    try {
+        [xml]$linkedProject = Get-Content -LiteralPath $projectMetadata -Raw
+        foreach ($link in $linkedProject.SelectNodes('//linkedResources/link')) {
+            $uri = [string]$link.locationURI
+            if (-not $uri) { $uri = [string]$link.location }
+            if (-not $uri) { continue }
+            if ($uri -match '^([A-Za-z_][A-Za-z0-9_]*)/(.*)$' -and $ccsMacros.ContainsKey($Matches[1])) {
+                $uri = '${' + $Matches[1] + '}/' + $Matches[2]
+            }
+            $resolved = Resolve-CcsPathValue $uri
+            if (Test-Path -LiteralPath $resolved -PathType Leaf) { $linkedFiles += $resolved }
+            else { Info "WARNING : linked resource missing on disk -> $uri" }
+        }
+    } catch { Info "WARNING : cannot parse linked resources from .project -> $($_.Exception.Message)" }
+}
+if ($linkedFiles.Count -gt 0) { Info "LINKED  : $($linkedFiles.Count) SDK resource file(s)" }
+
 # ---- include paths ----
 $incNode = Get-OptionNode 'compilerID.INCLUDE_PATH'
 $rawInc = @()
 if ($incNode) { foreach ($x in $incNode.listOptionValue) { $rawInc += [string]$x.value } }
 $includes = @()
 foreach ($p in $rawInc) {
-    $q = ([string]$p).Trim('"')
-    $q = $q.Replace('${workspace_loc:/${ProjName}}', $ProjectPath)
-    $q = $q.Replace('${workspace_loc:/${ProjName}/', ($ProjectPath + '\'))
-    $q = $q.Replace('${ProjName}', $projName)
-    $q = $q.Replace('${CG_TOOL_ROOT}', $cgRoot)
-    $q = $q -replace '/', '\'
-    $q = $q.Trim('"').TrimEnd('}')
+    $q = Resolve-CcsPathValue ([string]$p)
     if ($q -and -not (Test-Path -LiteralPath $q)) {
         # include path declared in the project but missing on disk (other PC / moved project):
         # CCS would fail here; we skip it and keep compiling, but say it loudly - otherwise the
@@ -370,6 +421,9 @@ $cmdActive   = @($allCmd | Where-Object { -not (Test-Excluded $_.FullName) } | S
 foreach ($f in $cmdActive) {
     if ($cmdFiles -notcontains $f.FullName) { $cmdFiles += $f.FullName }
 }
+foreach ($f in @($linkedFiles | Where-Object { [IO.Path]::GetExtension($_) -ieq '.cmd' })) {
+    if ($cmdFiles -notcontains $f) { $cmdFiles += $f }
+}
 if ($cmdExcluded.Count -gt 0) {
     Info ("EXCLUDED: .cmd skipped (exclude from build in .cproject): " + (($cmdExcluded | ForEach-Object { $_.Name }) -join ', '))
 }
@@ -396,6 +450,9 @@ $allLibs = @(Get-ChildItem -Path $ProjectPath -Recurse -Filter '*.lib' -ErrorAct
              Where-Object { $_.FullName -notmatch '\\Debug\\' })
 $libExcluded = @($allLibs | Where-Object { Test-Excluded $_.FullName })
 $libs = @($allLibs | Where-Object { -not (Test-Excluded $_.FullName) } | ForEach-Object { $_.FullName })
+foreach ($f in @($linkedFiles | Where-Object { [IO.Path]::GetExtension($_) -ieq '.lib' })) {
+    if ($libs -notcontains $f) { $libs += $f }
+}
 if ($libExcluded.Count -gt 0) {
     Info ("EXCLUDED: .lib skipped (exclude from build in .cproject): " + (($libExcluded | ForEach-Object { $_.Name }) -join ', '))
 }
@@ -406,7 +463,7 @@ if ($libExcluded.Count -gt 0) {
 # (APP / User / DSP2833x_Libraries) any other top-level folder counts as well - a module
 # may legitimately live next to APP/ (e.g. <project>\OpenLoop\).  Known non-source dirs
 # are skipped.
-$srcRoots = @()
+$srcRoots = @($ProjectPath)
 foreach ($sub in @('APP', 'User', 'DSP2833x_Libraries')) {
     $p = Join-Path $ProjectPath $sub
     if (Test-Path $p) { $srcRoots += $p }
@@ -418,11 +475,14 @@ foreach ($d in @(Get-ChildItem -Path $ProjectPath -Directory -ErrorAction Silent
         $srcRoots += $d.FullName
     }
 }
-if ($srcRoots.Count -eq 0) { $srcRoots = @($ProjectPath) }
 $srcAll = @(Get-ChildItem -Path $srcRoots -Recurse -File -Include '*.c', '*.asm' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '\\Debug\\' -and $_.FullName -notmatch '\\auto_build\\' })
+            Where-Object { $_.FullName -notmatch '\\Debug\\' -and $_.FullName -notmatch '\\auto_build\\' } |
+            Sort-Object FullName -Unique)
 $srcExcluded = @($srcAll | Where-Object { Test-Excluded $_.FullName })
 $cfiles = @($srcAll | Where-Object { -not (Test-Excluded $_.FullName) } | ForEach-Object { $_.FullName })
+foreach ($f in @($linkedFiles | Where-Object { [IO.Path]::GetExtension($_) -in @('.c', '.asm', '.cla', '.cpp') })) {
+    if ($cfiles -notcontains $f) { $cfiles += $f }
+}
 if ($cfiles.Count -eq 0) { Fail "no C/ASM sources found under: $($srcRoots -join ', ')" 2 'NO_SOURCES' }
 if ($srcExcluded.Count -gt 0) {
     Info ("EXCLUDED: source skipped (exclude from build in .cproject): " + (($srcExcluded | ForEach-Object { $_.Name }) -join ', '))
@@ -534,13 +594,7 @@ if ($compileErrors.Count -eq 0) {
     foreach ($d in $lnkDiagSupp) { $lflags += "--diag_suppress=$d" }
     # the project's own library search paths (--search_path), macros expanded, existing ones only
     foreach ($p in $lnkSearch) {
-        $q = ([string]$p).Trim('"')
-        $q = $q.Replace('${workspace_loc:/${ProjName}}', $ProjectPath)
-        $q = $q.Replace('${workspace_loc:/${ProjName}/', ($ProjectPath + '\'))
-        $q = $q.Replace('${ProjName}', $projName)
-        $q = $q.Replace('${CG_TOOL_ROOT}', $cgRoot)
-        $q = $q -replace '/', '\'
-        $q = $q.TrimEnd('}')
+        $q = Resolve-CcsPathValue ([string]$p)
         if ($q -and (Test-Path -LiteralPath $q)) { $lflags += "-i$q" }
     }
     $lnkArgs = @()

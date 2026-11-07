@@ -1,11 +1,11 @@
 # CCS 详细操作手册
 
-> 此文保留原技能的命令、排错表和现场经验。按主技能的任务路由选择需要的章节；板级数值只适用于文中注明的工程。文中的 `references/` 路径相对于技能根目录；如与当前工程事实或主技能任务路由冲突，以后者为准。
+> 此文保留原模式的命令、排错表和现场经验。只要读取当前板数据值且不编译、下载时，先看[只读模式](read-only-mode.md)。板级数值只适用于文中注明的工程；如与当前工程事实或主技能任务路由冲突，以后者为准。
 
 
 # TI C2000 / DSP2833x 全自动开发 + 调试（CCS12 / CCS6）
 
-把「写代码 → 编译 → 下载 → 读回结果」整条链路自动化。**每次交付前必须有一次真实构建证据**。
+把原模式的「写代码 → 编译 → 下载 → 读回结果」链路自动化。**交付代码改动前必须有真实构建证据**；只读模式仅交付实际读取的数据，不要求编译。
 
 ## 电网锁相任务入口
 
@@ -76,8 +76,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps
 #   ... -WaitFor "gBootStage == 5"     ← 5 = 已进主循环（推荐在 main 里埋这种"阶段追踪变量"）
 #   详见 references/dss-debug.md 的「判据怎么选」和「读太早的典型误判清单」
 
-# ④ 只读回，不动目标（程序已由别的方式跑着）
-... ti_c2000_debug.ps1 -ProjectPath "<工程根目录>" -ReadOnly -ReadVars "EPwm1Regs.TBCTR"
+# ④ 只读当前板的数据值：不编译、不下载；具体用法见 references/read-only-mode.md
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -ReadOnly -ReadVars "EPwm1Regs.TBCTR"
 ```
 
 脚本输出英文（避免 PowerShell 中文编码问题），**判定只看 `RESULT: OK` / `RESULT: FAIL`**。
@@ -175,7 +175,7 @@ Select-String -Path "<日志路径>" -Pattern 'RESULT|^VAR |ready'
 | `redefinition of symbol` | 两个模块同名函数/变量（常见 `error()`、`Init()`），改前缀 |
 | 找不到编译器 / `.cproject` 声明的版本没装 | 脚本会自动退回该 CCS 自带的 C2000 编译器并打印 NOTE |
 | 下载失败 `no probe / cannot connect` | 仿真器没插/板上电，或 CCS GUI 已占用 JTAG（先关 GUI 里的调试会话） |
-| `Error -151` / `Error -1135`（探针报错，**时好时坏**） | 连接类型与探针版本不一致（v1 配 v2/v3 会时通时断）：`scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2` 一键对齐（同时改 ccxml + .ccsproject，用法见 `references/other-devices-and-probes.md` §3.1）。改完仍报错，再拔插探针 USB（正常枚举 3 个设备）/查 JTAG 排线/板子供电/CCS 会话占用 |
+| `Error -151` / `Error -1135`（探针报错，**时好时坏**） | 连接类型与探针版本不一致（v1 配 v2/v3 会时通时断）：`scripts\ti_c2000_set_probe.ps1 -ProjectPath <工程> -Probe v2` 一键对齐（同时改 ccxml + .ccsproject，用法见 `references/other-devices-and-probes.md` §3.1）。**若 `xds100serial` 也扫不到设备、但设备管理器三路都 OK** → 先查 ccxml 的 `Emulator Selection` 是否用了默认 `Only one XDS100 installed`（多块历史设备残留时会打开到幽灵实例，报 `SC_ERR_FTDI_OPEN`），改成**按串号指定**（写法与判据见 `references/other-devices-and-probes.md` §3.1 的 `-151` 专条；2026-11-06 实测这一步才是真因）；再拔插探针 USB（正常枚举 3 个设备）/换 USB 线（能传数据的）/查 JTAG 排线/板子供电/CCS 会话占用 |
 | 读回全是 0 | 程序还没跑到（加大 `-RunMs`）、外设时钟未开（`InitSysCtrl()` 没执行）、或没连上目标 |
 | `ready after 250 ms` 但 `TBPRD`/`SCILBAUD` 读回 0 | 就绪判据用了 `.bss` 全局变量，被上次运行的 RAM 残留值误触发（`loadProgram()` 不清 .bss）；改用外设寄存器判据，见 SOP 第 5 点 |
 | 自检 `LINK_ERRORS: unresolved symbols`，且 `SOURCES` 数量比预期少 | 源码在"脚本没扫到的目录"里：脚本按 CCS 规则扫 `APP`/`User`/`DSP2833x_Libraries` + 工程顶层其它目录；若新目录在更深层，或名字在 `$nonSrcDirs` 排除表里，就得调整脚本或用顶层目录 |
@@ -236,7 +236,7 @@ C2000Ware 里 cmd 怎么选、2837x/28379x 的 bitfield/driverlib 骨架、SysCo
 | `#10056 symbol "X" redefined`（同一符号在两个 `.obj` 里各定义一次） | 工程目录树里有**多余的 `.obj`**：CCS 会把工程里每个 `.obj` 都交给链接器（和 `.cmd`/`.lib` 同规则）。常见来源：脚本/手工编译的残留（`<工程>\Debug\auto_build\obj`、随手 `cl2000 -c` 的 obj）。自检脚本现已把产物写到 `%TEMP%\ti_c2000_build\<工程>\` 并自动清理旧残留；仍报错就 `Get-ChildItem -Recurse -Filter *.obj` 搜一遍，只留 `<工程>\<配置名>\` 下 CCS 自己的，然后 CCS 里 Project→Clean 重建 |
 | `TIMEOUT` | 就绪条件在上限内没成立 | 加大 `-RunMs` 或修 `-WaitFor`；若确实卡住，用「读 PC + map 文件」定位卡在哪个函数 |
 | `CONNECT_FAILED` | 打不开调试会话（连 ccxml 都没解析成功） | 查 ccxml 是否有效、JTAG 是否被 CCS GUI 占用、板子是否上电、`-CorePattern` 核是否选对 |
-| `LOADTI_ERROR` / `LOADTI_TIMEOUT` | loadti 报错 / 超时没出现 `Done` | 看打印出的原始错误行；加大 `-TimeoutSec`；确认探针与板子 |
+| `LOADTI_ERROR` / `LOADTI_TIMEOUT` | loadti 报错 / 超时没出现 `Done` | 看打印出的原始错误行；加大 `-TimeoutSec`；确认探针与板子。**若原始行是 `'""F:\...\loadti.bat" "-c' is not recognized as an internal or external command`，那不是探针问题**：工程路径含空格（如 `...\Working Folder`）时，脚本曾把参数拼成一整串交给 `cmd /s /c`，PS7 会把内嵌引号转义成 `\"` 而 cmd 不认，于是根本没启动 loadti。已在 `ti_c2000_debug.ps1` 改为数组传参（`& $loadti @ltArgs`、`& cmd.exe /d /c $dss $js`）；再遇到同类拼接报错先查引号，不要先怀疑硬件 |
 | `NO_PROBE` | 系统没枚举到仿真器 | 插好探针并上电；模拟器目标（tisim）不受影响；必要时 `-NoProbeCheck` |
 | `NO_OUT_FILE` / `NO_CCXML` / `ENV_*` / `BUILD_FAILED` | 环境或参数不对 | 先 `-Build` 生成 `.out`；补 `-Ccxml`；检查 CCS/编译器安装 |
 
