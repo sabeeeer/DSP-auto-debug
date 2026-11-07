@@ -6,7 +6,7 @@
 #   Device agnostic: everything that differs between C2000 families
 #   (F2833x / F2802x / F2806x / F2837x / F28004x / ...) is read back from
 #   .cproject instead of being hard coded:
-#     - include paths, silicon version (-v28/-v29), memory model (-ml),
+#     - include paths, C28x silicon version (-v28), memory model (-ml),
 #       unified memory (-mt), float support (fpu32/fpu64/softlib)
 #     - codegen version -> the matching ti-cgt-c2000_* tool chain
 #     - linker command file + device "*Headers*.cmd", extra *.lib
@@ -207,6 +207,9 @@ $cgVersion = Get-OptionValue 'OPT_CODEGEN_VERSION'
 $siliconVer = '28'
 $v = Get-OptionValue 'compilerID.SILICON_VERSION'
 if ($v -match '\.(\d+)\s*$') { $siliconVer = $Matches[1] }
+if ($siliconVer -ne '28') {
+    Fail "compilerID.SILICON_VERSION=$v is outside this cl2000/C28x build helper; use the matching device toolchain" 2 'UNSUPPORTED_DEVICE'
+}
 $largeMem = (Get-OptionValue 'compilerID.LARGE_MEMORY_MODEL') -eq 'true'
 $unified  = (Get-OptionValue 'compilerID.UNIFIED_MEMORY')    -eq 'true'
 $fs       = Get-OptionValue 'compilerID.FLOAT_SUPPORT'
@@ -353,7 +356,8 @@ foreach ($d in ($includes + $ProjectPath)) {
     if ($devHdr) { break }
 }
 $devNote = ''
-if ($devHdr -match 'driverlib\.h|^device\.h$') { $devNote = ' (driverlib/SysConfig style: expect EABI + *_eabi.lib)' }
+if ($devHdr -eq 'F29H85x_Device.h') { Fail 'F29/C29x is outside this cl2000/C28x build helper' 2 'UNSUPPORTED_DEVICE' }
+if ($devHdr -match 'driverlib\.h|^device\.h$') { $devNote = ' (driverlib/SysConfig style: verify the project ABI and library variant)' }
 
 # ---- runtime library ----
 $floatFlag = '--float_support=fpu32'

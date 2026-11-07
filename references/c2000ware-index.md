@@ -141,4 +141,4 @@ pin_map / sci / sdfm / spi / sysctl / upp / usb / xbar / version（+ `hw_*.h` �
    - **载波比较法**：调制波 + min-max 零序注入，与三角载波比较（本工程 `Emit_Wave\1-3SVPWM_YJB` 用的这个，实测三态互斥、和值 ≈1000、5Hz 正确）
    - **矢量合成法**：大扇区 → 小扇区 → 矢量作用时间（学术/CSDN 常见，作用时间与①等价）
 3. **本机两套 SDK 都在**：`F:\c2000ware-core-sdk`（v26，新，含 device_support/driverlib/libraries）+ `F:\controlSUITE`（老，含 DMC 电机库 `libs\app_libs\motor_control\`）。
-4. 检索时**务必用本 skill 的 `scripts\c2000ware_find.ps1`**（它会自动定位 SDK 根并全库 grep）；**不要**自己写 `Get-ChildItem` —— 容易因 `-First N` 截断而得出假结论（本文件这条就是踩过两次坑后写的）。
+4. 库/API 的跨 SDK 搜索用 `scripts\c2000ware_find.ps1`；同器件外设例程先用 `scripts\list_peripheral_examples.ps1` 列全候选。`c2000ware_find.ps1` 默认只显示前 30 条，不能把截断结果当作“没有该例程”。

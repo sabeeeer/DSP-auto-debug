@@ -8,10 +8,8 @@
 >   —— 附件 `device_support.zip`(10.9 MB) / `driverlib.zip`(20.1 MB) / `libraries.zip`(9.2 MB) /
 >   `utilities.zip` / `boards.zip`（解压即用，目录结构与原 SDK 一致）
 > - 仓库主页：`https://github.com/sabeeeer/c2000ware-ref`
-> - 本机 git 快照（含完整文件树；网络通时可 `git push` 补推）：`C:\Users\Jordon\CodeBuddy\c2000ware-ref`
+> - 本机 git 快照可作为额外参照源，路径以实际机器为准。
 > - 原 SDK 丢失时：解压附件（或 clone 仓库），再用 `c2000ware_find.ps1 -SdkRoot <解压目录>` 继续查例程。
-> - 注：2026-09-27 实测本机**直连 `github.com` 不通、`api.github.com` 通**；上传走 API/Release 通道，
->   `git push` 需等网络恢复或开本地代理（`git -c http.proxy=http://127.0.0.1:12450 push`）。
 >
 > **路径不要写死**：`scripts\c2000ware_find.ps1` 会自动探测参照源（`SOURCE:` 行会打印用的是哪个）：
 > ① `-SdkRoot` 显式指定 → ② 环境变量 `C2000WARE_ROOT`/`C2000WARE` → ③ 常见安装路径
@@ -47,8 +45,7 @@ F:\c2000ware-core-sdk\
 驱动/API → `driverlib\<器件>\driverlib\`；链接脚本 → `device_support\<器件>\common\cmd\` 与 `headers\cmd\`；
 板级定义 → `boards\<板名>\`。器件名写法：`f2833x`、`f2837xd`、`f2837xs`、`f2838x`、`f28004x`、`f28p65x`…
 
-> F2833x（DSP28335）在 C2000Ware 里与 controlSUITE v142 是**同一套代码**（仅目录改名、个别例程增删）；
-> 28335 的例程/头文件两边都能用，cmd 见 §4。
+> F2833x（DSP28335）在 C2000Ware 和 controlSUITE v142 都有 bitfield 例程与头文件；实际版本、工程宏和 `.cmd` 要以当前项目为准，不能把两个包视作完全相同。
 
 ---
 

@@ -1,91 +1,20 @@
-# 迁移到其他 agent（Codex / Claude Code / Cursor / …）
+# 跨 agent 安装
 
-**结论：能迁，本质上是"换个目录"。**
-
-这个仓库真正值钱的是 `scripts/*.ps1`（纯 PowerShell 调 CCS 的 `cl2000` / `loadti` / DSS）和 `references/*.md`，
-它们**不含任何 CodeBuddy 专有 API**；`SKILL.md` 用的 `name` + `description` frontmatter 是同代
-agent 的通用 skill 格式（CodeBuddy、Claude Code、Codex 都读 `SKILL.md`，Cursor / Gemini CLI 等也兼容）。
-
-## 1. 各 agent 的安装位置
-
-| agent | skill 目录 | 备注 |
-|---|---|---|
-| CodeBuddy | `~/.codebuddy/skills/ti-c2000-ccs-auto/` | 本仓库默认；按 `description` 自动匹配加载 |
-| Claude Code | `~/.claude/skills/ti-c2000-ccs-auto/` | 个人级；项目级可放 `<工程>/.claude/skills/` |
-| Codex | `~/.codex/skills/ti-c2000-ccs-auto/` | 新版 Codex 支持 `SKILL.md` 形式的 skill（`skills/.system/` 是系统技能，不要动）；也可以用它的 `$skill-installer` 安装 |
-| 其他（Cursor / Windsurf / Gemini CLI / Copilot CLI …） | 各自的 skills 目录，或直接把 `SKILL.md` 内容并入它的规则文件 | 也可以用 `skills` CLI（vercel-labs/skills）批量安装 |
-
-## 2. 一键部署（推荐）
-
-`setup/Setup-CCS-Skills.ps1` 已参数化，`-Target` 决定安装目录：
+本技能的 PowerShell 脚本调用本机 CCS；迁移后仍须有实际工程、编译器、探针及目标板。平台和硬件边界见仓库根目录的 [RECOVER.md](../RECOVER.md)。
 
 ```powershell
-# 先干跑，看它打算做什么（不改任何东西）
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target codex -DryRun
-
-# 装给 Codex      -> ~/.codex/skills/ti-c2000-ccs-auto
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target codex
-
-# 装给 Claude Code -> ~/.claude/skills/ti-c2000-ccs-auto
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target claude
-
-# 装到任意目录（自研 agent / 便携版）
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup\Setup-CCS-Skills.ps1 -Target custom -SkillsRoot D:\agent\skills
-
-# 不想让它碰 CodeBuddy 的配置文件
-... -NoHooks
+pwsh -NoProfile -File .\setup\Setup-CCS-Skills.ps1 -Target codex -DryRun
+pwsh -NoProfile -File .\setup\Setup-CCS-Skills.ps1 -Target codex
 ```
 
-**hooks 只有 CodeBuddy 用得上**：git 快照的 4 组 hook 写在 `~/.codebuddy/settings.json`，而且 hook
-匹配的是 CodeBuddy 的工具名（`delete_file|write_to_file|replace_in_file`）。给别的 agent 安装时脚本自动跳过，
-也可以用 `-NoHooks` 显式跳过。
+`-Target codebuddy` 安装到 `~/.codebuddy/skills/`，`-Target claude` 安装到 `~/.claude/skills/`，`-Target codex` 安装到 `~/.codex/skills/`。其他目录用 `-Target custom -SkillsRoot <目录>`。新会话中先检查 [SKILL.md](../SKILL.md) 能被所用 agent 发现；各产品的自动触发行为以当前版本为准。
 
-## 3. 迁移后会"少"什么
-
-| 能力 | CodeBuddy | 其他 agent |
-|---|---|---|
-| skill 自动加载 | 按 `description` 匹配，自动加载 | Codex 会依据技能名称和描述选择相关技能；关键任务可显式指定 `$ti-c2000-ccs-auto`。其他 agent 的触发方式按其实际环境确认。 |
-| git 快照 hooks | 有（由 `git-management` 这个 skill 提供） | **没有**，要自己写对应 agent 的 hook 机制 |
-| 工具名差异 | `use_skill` / `write_to_file` / `replace_in_file` | 各家不同；`SKILL.md` 里的自然语言指令不受影响 |
-
-脚本本身（`ti_c2000_build.ps1` / `ti_c2000_debug.ps1`）在任何 agent 下行为一致：只要 agent 能执行
-PowerShell、能读到 `SKILL.md`，就可用。
-
-## 4. 没有 skill 机制的 agent：用 AGENTS.md 兜底
-
-把下面这段贴进 `AGENTS.md`（Codex 全局 `~/.codex/AGENTS.md`，或工程根目录 `AGENTS.md`）：
-
-```markdown
-## TI C2000 / CCS 工程（DSP2833x、F2837x 等）
-
-处理电网 PLL/SPLL/SOGI/SolarLib/Park/Clarke 前，先完整阅读
-`<skill>/references/spll-pll-algorithms.md`，检查工程已有 SolarLib 与适配层，
-先说明可复用模块、相位约定、采样周期和系数；需要另写算法时说明现有实现不适用的原因。
-
-改任何 `.c/.h/.cproject` 后，必须跑一次编译链接自检，看到 `RESULT: OK` 才算通过：
-  pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程根目录>"
-
-要上板验证：
-  ... ti_c2000_debug.ps1 -ProjectPath "<工程>" -Build -Run -ReadVars "<寄存器/变量,逗号分隔>"
-
-脚本失败会打印 `FAILURE: <分类>` + `REASON: <原因>`（COMPILE_ERRORS / LINK_ERRORS / TIMEOUT /
-CONNECT_FAILED / LOADTI_ERROR / LOADTI_TIMEOUT / NO_PROBE / NO_OUT_FILE / ENV_*），必须原样转述，
-禁止把失败说成成功。完整规则见 <skill>\SKILL.md。
-```
-
-## 5. 与 agent 无关的硬前提
-
-1. **必须装 CCS**（12.x 或 6.x）：脚本调用它的 `cl2000`、`loadti`、DSS；只做编译链接自检不需要硬件。
-2. **`.cproject` 里的 TI 头文件是绝对路径**：换机器/换目录后要在 CCS 里改
-   （Project → Properties → Build → C2000 Compiler → Include Options），否则报
-   `cannot open source file "DSP2833x_Device.h"`；脚本会先打 `WARNING : include path missing on disk`。
-3. **Windows + PowerShell 7.0+（pwsh）**：脚本首行 `#requires -Version 7.0`；仍保持纯 ASCII（历史约定 + 避免编码坑）。
-   注意 `Get-WmiObject` 在 7.x 已移除，枚举仿真器用 `Get-CimInstance`。
-4. 上板还需要仿真器驱动（XDS100/110/200/510/560、J-Link 等）；本技能的硬件实测记录覆盖 DSP28335 + XDS100v2 和 F28379D + XDS100v2。
-
-## 6. 迁移后自检
+迁移工程后核对 `.cproject` 的 include/编译器路径、`.ccxml` 的探针与目标核，以及 `.cmd` 和 `.out`。先执行不碰硬件的构建测试；需要更新程序才下载，读数另起只读调用：
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File <skill>\scripts\ti_c2000_build.ps1 -ProjectPath <工程>
-# 期望输出：CONFIG / DEFINES / EXCLUDED 三行正常 + compile: OK + link: OK + RESULT: OK
+pwsh -NoProfile -File .\scripts\ti_c2000_build.ps1 -ProjectPath "<工程>"
+pwsh -NoProfile -File .\scripts\ti_c2000_debug.ps1 -ProjectPath "<工程>" -Run
+pwsh -NoProfile -File .\scripts\ti_c2000_read_runtime.ps1 -ProjectPath "<工程>" -Variables "EPwm1Regs.TBPRD"
 ```
+
+如果目标板当前已有程序且只需查看数据，直接执行最后一条只读命令。任何目标核、外设引脚或库兼容性均按当前器件和工程重新验证；DSP28335 与 F28379D 的已验证范围见[器件入口](../references/device-platform.md)。

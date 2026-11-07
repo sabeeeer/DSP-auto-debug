@@ -9,7 +9,7 @@
 
 | 项目 | 来源 | 说明 |
 |---|---|---|
-| 汇编器版本 | `compilerID.SILICON_VERSION` | C28x 用 `-v28`，C29x 用 `-v29`（F29H85x） |
+| 目标架构 | `compilerID.SILICON_VERSION` | 当前脚本只支持 C28x 的 `-v28`；F29/C29x 使用不同工具链，须另行适配。 |
 | 内存模型/统一内存 | `LARGE_MEMORY_MODEL`、`UNIFIED_MEMORY` | 自动加/不加 `-ml`、`-mt` |
 | 浮点支持 | `FLOAT_SUPPORT` | `fpu32` / `fpu64`（F2838x）/ `softlib`（F2802x 等无 FPU） |
 | 输出格式 | `OUTPUT_FORMAT` | COFF / EABI 决定运行库后缀 `_eabi` |
@@ -33,12 +33,12 @@
 | F2834x | F28346/F28345 | `DSP2834x_Device.h` | `*_RAM_lnk.cmd` + `DSP2834x_Headers_nonBIOS.cmd` | `rts2800_fpu32.lib` | |
 | F2802x / F2803x / F2805x（Piccolo） | F28027、F28035、F2805x | `F2802x_Device.h` 等 | `F2802x_Headers_nonBIOS.cmd` 等 | `rts2800_ml.lib`（**无硬件 FPU**，纯软件浮点） | RAM 小，注意栈与链接脚本；浮点运算慢 |
 | F2806x（Piccolo + FPU） | F28069/F28062 | `F2806x_Device.h` | `F2806x_Headers_nonBIOS.cmd` | `rts2800_fpu32.lib` | 有 FPU32 |
-| F2837xD / F2837xS | F28379D/F28377D/F28377S | `F2837xD_Device.h` / `F2837xS_Device.h` | `F2837xD_RAM_lnk_cpu1.cmd` + `*_Headers_nonBIOS_cpu1.cmd` | `rts2800_fpu32_eabi.lib` | **双核**（D 系列）、**EABI only**、常见 driverlib+SysConfig、带 CLA |
+| F2837xD / F2837xS | F28379D/F28377D/F28377S | `F2837xD_Device.h` / `F2837xS_Device.h` | `F2837xD_RAM_lnk_cpu1.cmd` + `*_Headers_nonBIOS_cpu1.cmd` | 依工程 ABI 选 COFF/EABI 对应运行库 | **双核**（D 系列）、带 CLA；当前工程的 ABI、bitfield/driverlib 与目标核均须逐项核对 |
 | F2807x | F28075/F28076 | `F2807x_Device.h` | `*_RAM_lnk.cmd` | `rts2800_fpu32_eabi.lib` | EABI |
 | F2838x | F28388D | `F2838x_Device.h` | `F2838x_*_lnk_cpu1.cmd` | `rts2800_fpu64_eabi.lib` | 双 C28 核 + Cortex-M4，**三核各自建工程** |
 | F28004x / F28003x / F28002x | F280049C、F280039C | `F28004x_Device.h` 等 | `*_lnk*.cmd` | `rts2800_fpu32_eabi.lib` | EABI；几乎都是 driverlib/SysConfig 工程 |
 | F28M35x（Concerto） | F28M35H52C | `F28M35x_Device.h` | | | C28 + Cortex-M3，两个核分别建工程 |
-| C29x（新一代） | F29H85x | `F29H85x_Device.h` | | | CGT 较新，汇编器 `-v29`（脚本按 `.cproject` 自动选） |
+| C29x（不同架构） | F29H85x | — | — | — | **不在当前 `cl2000` 构建/下载脚本的验证或支持范围内**；须用对应 C29 工具链另行适配。 |
 
 **driverlib / SysConfig 型工程**：`.syscfg` 生成的文件（`ti_drivers_config.c/h` 等）是 CCS 构建时产出的。
 本脚本只会编译磁盘上已有的 `.c/.asm`，所以这类工程请先在 CCS 里构建一次（或用 SysConfig CLI 生成）再用本脚本做回归自检；本机未实测该流程。
@@ -243,8 +243,7 @@ ADC/SCI/SPI/watchdog/eCAP 等），全部 `RESULT: OK`。
 ## 4. 双核 / 多核器件怎么办
 
 1. 每个核建自己的工程与 `.out`（cpu1/cpu2 分开）。
-2. `.ccxml` 里把目标核选成默认；DSS 侧本 skill 提供 **`-CorePattern ".*CPU1.*"`** 选择会话（默认 `.*` 取第一个核心）。
-   `loadti` 没有选核参数，它按 `.ccxml` 的默认核加载 → **为每个核准备各自的 `.ccxml`**。
+2. DSS 只读侧用 **`-CorePattern ".*CPU1.*"`** 明确选择会话（默认 `.*` 取第一个匹配核心）。下载侧须验证当前 `.ccxml` 实际选择的核与 `.out` 对应；当前脚本没有独立的下载选核参数，需要操作不同核心时准备可明确指向该核的目标配置。
 3. 读变量时 `-ReadVars` / `-WaitFor` 里的符号必须在**该核**的符号表里；跨核读取要用 IPC/共享内存变量。
 4. F2838x 还有 Cortex-M4 核：它的工程是 ARM 编译器（`ti-cgt-arm*`），本 skill 只覆盖 C28x 侧。
 

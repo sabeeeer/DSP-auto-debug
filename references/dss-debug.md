@@ -1,143 +1,40 @@
-# 下载运行与 DSS 运行态只读（CCS12 实测）
+# CCS 下载与 DSS 运行态读取
 
-> 两步顺序：**loadti** 显式下载并运行新程序；随后 **DSS 只读**在运行态读取变量。`-Build/-Run/-LoadOnly` 与 `-ReadVars` 不能合在同一调用；只带 `-ReadVars` 的旧写法会自动进入只读模式。
+执行模式确需更新程序时，`ti_c2000_debug.ps1 -Build -Run` 用 `loadti -r -a` 下载并启动；之后单独调用 `ti_c2000_read_runtime.ps1`。只读任务直接调用读取脚本。`-Build/-Run/-LoadOnly` 与 `-ReadVars` 同次使用会在连接前拒绝。
 
-## 0. 前置
+## 下载/运行边界
+
+| 参数 | 效果 |
+|---|---|
+| `-Build` | 构建而不下载。 |
+| `-Run` | 下载现有 `.out`，复位并异步运行。 |
+| `-Build -Run` | 构建成功后下载运行。 |
+| `-LoadOnly` | 显式下载后保持暂停；不得用来读取数据。 |
+
+成功看 `RESULT: OK` 与退出码 0，下载还应有 `Done`，运行还应有 `Target running...`。失败先看原始错误、探针/串号、`.ccxml`、供电、目标核和 CCS GUI 是否占用 JTAG；双核与 F28379D 见[器件/探针记录](other-devices-and-probes.md)。
+
+## DSS 只读入口
 
 ```powershell
-# 仿真器是否在线（没有就别试下载）
-Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'XDS' } | Select-Object Name
-# CCS GUI 是否占用 JTAG（占用时先关掉里面的调试会话）
-Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" `
+  -ProjectPath "<工程>" -Ccxml "<当前目标配置.ccxml>" `
+  -OutFile "<与运行固件匹配的.out>" -Variables "<变量,寄存器>"
 ```
 
-目标配置用工程自带的 `<工程>\targetConfigs\TMS320F28335.ccxml`（**XDS100v2** + TMS320F28335）。
-探针版本与 ccxml 连接类型不一致会出现"能连上但时好时坏"的 `-151`/`-1135`，改法见 other-devices-and-probes.md §3.1。
+`dss_template.js` 在 `connect()` **之前**设置 `HaltOnConnect=false`、`AutoResetOnConnect=false`、`RestartOnSymbolLoad=false`、`UseLegacyStopMode=false`、`AllowInterruptsWhenHalted=true`、`PoliteRealtimeMode=true`；之后仅 `symbol.load()` 并读取。固件中的 `ERTM` 与这些调试器选项配合。脚本发现目标已停或实时读取失败就报错，不调用 `halt()`、`runAsynch()`、复位或下载。详细边界见[只读规则](read-only-mode.md)。
 
-## 1. loadti（下载 / 复位运行）
+用 `-WaitFor "gBootStage == 5" -RunMs 15000` 可在运行态轮询就绪条件；不指定时直接取当前值。条件要能证明**本次**初始化已到目标阶段，宽松的 `.bss != 0` 可能只是 RAM 残值。超时返回失败，超时后打印的变量值不能当作已就绪证据。目标显示 running 也不是应用心跳证明，若有单调计数器，应跨时间核对递增。
 
-```powershell
-& '<CCS_ROOT>\ccs_base\scripting\examples\loadti\loadti.bat' `
-    '-c=<工程>\targetConfigs\TMS320F28335.ccxml' -r -a '-t=180000' '<工程>\Debug\<工程名>.out'
-```
+大数组用 `ti_c2000_read_array_runtime.ps1` 的固定下标分批读取；每批都在运行态，固件应先冻结缓冲或提供版本号。裸 `connect → halt → readData → runAsynch` 已造成程序中断和继电器释放；[读取事故案例](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md)保留原因与证据边界。`readData` 的页、字地址、宽度和数值范围须与表达式读数交叉验证，不因速度快就默认可信。
 
-| 选项 | 含义 |
+## 必要的 DSS API 备忘
+
+| 用途 | CCS 12.8 记录 |
 |---|---|
-| `-c=<ccxml>` | 目标配置（必需） |
-| `-l` | 只加载，不运行 |
-| `-r` | 运行前复位目标 |
-| `-a` | 异步运行：启动后立即返回（固件是 `while(1)` 时必须用） |
-| `-t=<ms>` | 脚本超时，避免永久挂住 |
-| `-x=<file>` | 生成 XML 日志（排错用） |
+| 只装载符号 | `session.symbol.load(out)`；不等于下载程序。 |
+| 读表达式 | `session.expression.evaluate(name)`；高频变量逐项读取不是原子快照。 |
+| 符号地址 | `session.symbol.getAddress(name)`；本机该版本没有 `lookupSymbol()`。 |
+| 读块 | `session.memory.readData(page, address, typeSize, count)`；C28x 的地址与数据解释先验证。 |
+| 延时 | `java.lang.Thread.sleep(ms)`；Rhino 没有 `env.sleep()`。 |
 
-**成功判据（脚本已内置）**：输出里出现 `Loading ... Done` 才算成功；出现 `error/failed` 或没有 `Done` 一律判失败。
-
-## 2. DSS（脚本化调试会话）
-
-```powershell
-& '<CCS_ROOT>\ccs_base\scripting\bin\dss.bat' '<脚本>.js'
-```
-
-`scripts/dss_template.js` 是**只读模板**，占位符 `{{CCXML}} {{OUT}} {{RUN_MS}} {{VARS}} {{WAIT_EXPR}}` 由
-`ti_c2000_debug.ps1` 填好后写到临时文件再执行：
-
-- 连接前关闭 `HaltOnConnect`、`AutoResetOnConnect`、`RestartOnSymbolLoad`、`UseLegacyStopMode`，打开 `AllowInterruptsWhenHalted` 与 `PoliteRealtimeMode` → 只 `symbol.load()` → 在运行态读值；模板里没有主动停核、恢复、复位或下载路径。正式入口是 `scripts/ti_c2000_read_runtime.ps1`，见[只读模式](read-only-mode.md)。本机 CCS12.8 的 `HaltOnConnect` 初始值为 true，仅删除显式 `halt()` 不够。
-- 历史 `MODE=full` 曾 `loadProgram → restart → halt → read → runAsynch`，现已移除。不要用临时 `dss.bat` 脚本复制这条旧链路；多变量、数组也走只读入口。问题复盘见[2026-11-07 读取中停核案例](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md)。
-
-### 就绪轮询（重要）
-
-下载并运行后立刻读可能拿到 0（本工程旧版 OLED 模拟 I2C 初始化曾需 ~3.25 s）。只读调用可用 `-WaitFor "<expr>"` 指定就绪条件（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`），**每 250 ms 在运行态读取一次**，无停核采样。没给 `-WaitFor` 时直接读当前值。
-命中即打印 `DSS: ready ('...') after N ms` 再正式读值；到预算（默认 8000 ms，`-RunMs` 可改）仍未命中会打印 `WAIT_TIMEOUT` 并采样，脚本默认返回 `RESULT: FAIL`，这些值不能当成就绪后的证据。
-轮询用 `isHalted()` 做保护、静默捕获异常，不会污染失败判定。
-
-#### 判据怎么选（实测踩坑，2026-09 于 4-1Two_Level）
-
-| 判据 | 结果 |
-|---|---|
-| `.bss` 全局变量（如 `OpenLoopCtrl.usCmpA != 0`、`xxx.usEnable == 1`） | **不可靠**：`loadProgram()` 不清 `.bss`，上次运行留下的 RAM 值会让它在 250 ms 就"就绪"，而此时 `EPwm1Regs.TBPRD` / `SCIA.SCILBAUD` 还是 0 —— 程序根本还没跑到初始化 |
-| 外设寄存器（如 `EPwm1Regs.TBPRD == 14999`、`SciaRegs.SCILBAUD != 0`） | 可靠，实测 3500 ms 命中，且与源码里的赋值一一对应 |
-
-判据最好选"**只有执行到某段代码才会被写成那个值**"的量（初始化里写死的 TBPRD/分频/波特率）。
-模板现在对"≤500 ms 就就绪"会额外打印 NOTE 提醒可能是残留值；看到这个 NOTE 就换寄存器判据重读一次。
-
-**★补充（2026-09-29，同一工程）：`.bss` 变量也能用，关键在判据要写"具体值"**
-
-上面那条更准确的说法是：**`!= 0` 这类宽松判据不可靠，`== 具体目标值` 是可靠的。**
-
-- **踩坑实例**：某次用 `-WaitFor "gBootStage != 0"`（该变量在 `main()` 第一行置 1）。
-  结果**一进 main 就满足**，而程序当时还在 `vOpenLoopInit()` 里做上电闪灯标记 ——
-  `vBoard_RollbackMark()` 是**阻塞式**的（`for` 里 `DELAY_US(700000)` + `DELAY_US(300000)`，
-  本项目闪 3 次加收尾 0.5s ≈ **3.5 秒**）。
-  于是读回一堆"未配置"状态：`EPwm1Regs.TBPRD = 0`、`ETSEL.all = 0`、`PIEIER3.all = 0`、`IER = 0`，
-  看着像"EPWM 完全没配"，其实只是**还没跑到那一步**；串口抓包也只抓了 31ms（程序在闪灯），
-  于是"数据恒定不变"，又像"调制器没工作"。前后白排查好几轮，甚至一度怀疑
-  "EPWM 配置被覆盖"和"看门狗复位"。
-- **正确做法**：判据写**目标值** —— `-WaitFor "gBootStage == 5"`（5 = 已进主循环），
-  或继续用外设寄存器（`EPwm1Regs.TBPRD == 7500`）。
-- **通用口诀**：当"读到的值既是残留、也可能是真实状态"时，**先确认程序跑到哪一步**，再解读寄存器。
-
-**★推荐习惯：在 `main()` 里埋"启动阶段追踪变量"**
-
-```c
-volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5=进主循环 */
-/* 每个关键步骤后赋值；初始化函数内部再细分（如 11~19 = 某 init 的各步）*/
-```
-- 启动卡住时，**读这一个变量就能定位到具体哪一行**（本例正是靠它发现"卡"在闪灯阻塞里）
-- 配合 `-WaitFor "gBootStage == N"` 顺带充当可靠的就绪判据
-- 代价只有一个 `Uint16`，建议每个工程都留一份
-
-**★"读太早"的典型误判清单**（看到这些先别下结论）
-
-| 读到的现象 | 先怀疑 | 而不是 |
-|---|---|---|
-| `TBPRD / ETSEL / ETPS / PIEIERx / IER` 全为 0 | 程序还没跑到 PWM 初始化 | "EPWM 配置被覆盖了" |
-| 串口抓包"数据恒定不变" | 程序仍在启动阶段（本项目 3.5 s 闪灯） | "调制器没工作 / 没发波" |
-| 变量是"上次运行的合理值"（如 `fFreq = 50`，而本次传 5） | RAM 残留（`loadProgram()` 不清 `.bss`） | "我的改动没生效 / 没编进去" |
-| `TBCTR` 不变、`theta` 不动 | 同上，先确认阶段 | "中断没跑 / 时钟没开" |
-
-**历史 full 模式的教训**：`memory.loadProgram()` 本身不会把 PC 指到程序入口，曾导致读到 Flash 旧程序；旧模板因此补了 `target.restart()` 等操作。当前模板只读，**不做这些操作**；新程序由前一步显式 `-Run` 通过 loadti 的 `-r -a` 启动。读数前仍需核对板上固件与符号 `.out` 的身份。
-
-### CCS12.8 实测 API 备忘
-
-| 需求 | 写法 |
-|---|---|
-| 取会话 | `env.getServer("DebugServer.1")` → `setConfig(ccxml)` → `openSession(".*")` |
-| 连接/运行控制 | `session.target.connect() / reset() / restart() / run() / runAsynch() / halt() / isHalted() / disconnect()` |
-| 加载程序 | `session.memory.loadProgram(path)`（同时装载符号） |
-| 只加载符号 | `session.symbol.load(path)` |
-| **寄存器读写** | `session.memory.readRegister("PC")` / `session.memory.writeRegister("PC", val)` ← 没有 `session.registers` |
-| 符号地址 | `session.symbol.getAddress("code_start")`（`lookupSymbol()` 在此版本不存在） |
-| 表达式/变量 | `session.expression.evaluate("EPwm1Regs.TBPRD")`（返回可直接打印的值） |
-| 延时 | `java.lang.Thread.sleep(ms)`（Rhino 没有 `env.sleep`） |
-| 路径转义 | JS 字符串里的 Windows 路径要双反斜杠（模板由 PS1 自动处理） |
-
-换成别的 CCS 版本时，先跑 `scripts/dss_api_probe.js` 反射出真实成员名，再改模板。
-
-## 3. 排错对照
-
-| 现象 | 原因 / 处置 |
-|---|---|
-| `JS: TypeError: Cannot find function sleep` | 用了 `env.sleep`；改 `java.lang.Thread.sleep(ms)` |
-| `Cannot call method "writeRegister" of undefined` | `session.registers` 不存在；改 `session.memory.writeRegister` |
-| `identifier not found: EPwm1Regs` | 只读会话没有载入匹配的符号，或板上固件与指定 `.out` 不一致；检查 `symbol.load`、目标核与构建标识 |
-| 读回全是 0 | ① 程序没跑到（在只读调用中换/加大 `-WaitFor` 与 `-RunMs`）② 外设时钟未开（对应模块的 `PCLKCRx` 位没使能）③ 板上固件与本地 `.out` 不匹配；不要改用停核读取 |
-| 想确认"到底跑到哪了" | 读 `PC`，再拿 map 文件（`%TEMP%\ti_c2000_build\<工程>\<工程>.map`）查该地址落在哪个函数；配合 `GpioCtrlRegs.GPADIR`、`SysCtrlRegs.PCLKCR1` 判断初始化进度 |
-| `Error reading memory: Address: 0x7012 ... 0x20000` | 用 `memory.readWord` 直接读外设帧会失败，改走 `expression.evaluate`（如 `SysCtrlRegs.PCLKCR1.all`） |
-| `no probe / cannot connect` | 仿真器未插/板未上电，或 CCS GUI 占用了 JTAG |
-| loadti 输出无 `Done` | 连接失败或目标被占用；加 `-x=<log>` 看详细日志 |
-| 读回值与代码不符 | 先核对"哪个程序在跑"：读 `PC` 并用 map 文件查它落在哪个函数 |
-
-## 4. 长时调试（几分钟级）
-
-- 就绪轮询命中即返回，`-RunMs` 只是上限：大程序直接给 `-RunMs 300000`（5 分钟）不会白等。
-- 下载慢（大 `.out`）时同时给 `loadti` 加超时：`-TimeoutSec 600`。
-- **DSS 默认 `scriptTimeout = -1`（不超时）**，模板会显式设成 `预算 + 300 s`；真正会打断长等待的是上层命令/IDE 超时。
-  规避方式：`-Background` 让脚本自分离运行（`Start-Process` + 日志重定向），立即返回日志路径，之后轮询：
-  `Select-String -Path <log> -Pattern 'RESULT|^VAR |ready'`。实测 20 s 预算的后台任务在 3.0 s 命中就绪并写入 `RESULT: OK`。
-
-## 5. 会话卫生
-
-- 每次运行都新建/关闭 DSS 会话，脚本结束前 `disconnect()` + `server.stop()`，避免占用 JTAG 影响 CCS GUI。
-- `-ReadOnly` 模式不编译、不下载；已有 `.out` 只给调试器加载符号。调试器实时选项和固件 `ERTM` 配合使用；若目标已暂停则报错，不自动启动。
-- 不用 `connect → halt → readData/evaluate → runAsynch` 的裸脚本观测数据。`runAsynch()` 返回或 `isHalted()==false` 不足以证明应用继续执行；需要确认时在只读模式跨时间读取固件中的单调计数，并核对 `.out` 身份。
-- 运行态 `evaluate` 不提供同一瞬间的多变量原子快照。要观察变化可连续多次采样并记录时间；若读不到，先查实时选项、DBGM、符号与目标核，不退回自动停核。
+换 CCS 版本时可先运行不连接目标板的 `scripts/dss_api_probe.js` 查看 API，再按当前版本验证实时选项。历史只读停核、构建后隐式 `loadti -l` 与浮点读回问题分别见[模式修复案例](debug-cases/dsp28335/2026-11-07-realtime-read-implicit-loadonly.md)和[浮点读回案例](debug-cases/dsp28335/2026-10-28-fpu-dss-float-readback.md)。
