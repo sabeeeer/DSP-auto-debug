@@ -17,5 +17,6 @@
 - `scripts/ti_c2000_read_runtime.ps1` 作为正式入口，转到同一版控 DSS 模板。连接前关闭自动停核、自动复位、符号加载重启和 legacy stop，打开实时模式及 polite mode；只装载符号，在运行态读值。目标已停或读取中停机时报错，不自动启动。
 - `ti_c2000_debug.ps1 -Build` 单独使用只构建；下载并运行必须显式 `-Run`，下载后暂停必须显式 `-LoadOnly`；无动作参数被拒绝。`tests/test_mode_dispatch.ps1` 在隔离假工程中验证这三条，`RESULT: OK`、退出码 0。
 - 运行态多个变量逐项读取并非原子快照；`isHalted=false` 只证明调试会话状态，不能证明 PC 在目标 `.out`，也不能证明主循环计数在增长。板上“新 RAM 固件下载后持续运行”的回归尚未做，不能标记为上板运行已回归。
+- 后续静态复核发现原 `-ReadOnly` 仅用禁用符号的正则黑名单过滤 DSS 表达式；现在改成只接受变量/字段/固定下标与简单只读比较，连接前拒绝赋值、调用及任意 C 表达式。隔离测试覆盖危险表达式和合法等待条件，未因此重新连接目标板。即使表达式安全，读清除寄存器仍须按芯片手册判断，且 `.out` 与运行固件的身份问题仍未自动解决。
 
 TI 依据：[CCS 12.8 实时访问与自动停核选项](https://software-dl.ti.com/ccs/esd/documents/users_guide_12.8.0/ccs_debug-main.html)、[DSS 实时选项 API](https://software-dl.ti.com/ccs/esd/documents/users_guide_12.0.0/sdto_dss_handbook.html)、[loadti 参数定义](https://software-dl.ti.com/ccs/esd/documents/sdto_dss_loadti.html)。

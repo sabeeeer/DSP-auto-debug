@@ -60,10 +60,19 @@ if ($ReadOnly) {
         Out2 "REASON: -ReadOnly requires -ReadVars; no program will be loaded"
         exit 2
     }
-    if ((@($ReadVars, $WaitFor) | Where-Object { $_ -match '(?<![<>=!])=(?!=)|\+\+|--|;|\b[A-Za-z_]\w*\s*\(' }).Count -gt 0) {
+    # Only simple data paths may be evaluated against a running target. A
+    # blacklist can miss C expression side effects (e.g. pointer calls or
+    # comma operators), so reject anything outside this small read grammar.
+    $pathPattern = '[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|->)[A-Za-z_][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]*)\])*'
+    $numberPattern = '-?(?:0[xX][0-9A-Fa-f]+|(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)'
+    $waitAtom = "(?:$pathPattern)(?:\s*(?:==|!=|<=|>=|<|>)\s*(?:$pathPattern|$numberPattern))?"
+    $waitPattern = "^\s*$waitAtom(?:\s*(?:&&|\|\|)\s*$waitAtom)*\s*$"
+    $readNames = @($ReadVars -split ',' | ForEach-Object { $_.Trim() })
+    $unsafeRead = @($readNames | Where-Object { $_ -notmatch "^$pathPattern$" })
+    if ($unsafeRead.Count -gt 0 -or ($WaitFor -and $WaitFor -notmatch $waitPattern)) {
         Out2 "FAILURE: READONLY_EXPRESSION_UNSAFE"
         Out2 "RESULT: FAIL"
-        Out2 "REASON: read-only expressions must not assign, call functions or mutate target state"
+        Out2 "REASON: read-only values must be simple symbol/field/constant-index paths; -WaitFor may compare them to paths or numbers with &&/||"
         exit 2
     }
 } elseif ($LoadOnly -and ($Run -or $ReadVars)) {

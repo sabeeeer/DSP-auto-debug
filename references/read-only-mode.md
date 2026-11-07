@@ -8,6 +8,7 @@
 - `-OutFile` 指向**已存在、与当前运行固件匹配**的 `.out`，仅向调试器装载符号，目标程序不被下载。若固件身份/符号不确定，先核对现有构建记录、map/校验值或 CCS 会话；无法确认时停止符号变量的判读，不用“顺手重新编译/下载”解决。
 - 运行态读取脚本在 `connect()` 前设置 CCS DSS 选项：`HaltOnConnect=false`、`AutoResetOnConnect=false`、`RestartOnSymbolLoad=false`、`UseLegacyStopMode=false`、`AllowInterruptsWhenHalted=true`、`PoliteRealtimeMode=true`。现场 CCS12.8 查询发现 `HaltOnConnect` 默认是 **true**；所以临时脚本即便没有显式 `halt()`，连接时也可能先停核再恢复。固件中的 `ERTM` 清除 C28x 的 DBGM，配合调试器实时选项使用；单靠 `ERTM` 不能代替调试器设置。
 - 目标必须已在运行。若连接后发现已暂停、读数时变成暂停或实时访问失败，脚本报错并不擅自 `runAsynch()`；先核对固件状态和 CCS 连接配置。运行态逐项读取也不构成同一时刻的原子快照，高频变量可跨中断变化。
+- 外设寄存器即使只执行读取，也可能有“读清除”等硬件语义；对状态/中断寄存器先查该器件手册的访问属性。需要观察多变量同一时刻的值时，在固件里准备原子快照或带序号的采样缓冲。
 
 ## 最小命令
 
@@ -18,7 +19,7 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" `
   -Variables "<参数表达式>,<ADC结果表达式>,<寄存器表达式>"
 ```
 
-单核器件可省略 `-CorePattern`；F28379D 等双核器件明确选 CPU1/CPU2。`-Variables` 必填，可传逗号分隔的多个变量或寄存器表达式；不要传会写寄存器、调用函数或产生副作用的表达式。直接调用旧入口 `ti_c2000_debug.ps1 -ReadOnly -ReadVars "..."` 也会走相同运行态路径。具体表达式从当前器件头文件、当前工程和已有 `.out` 确认，不照搬另一型号的寄存器名。
+单核器件可省略 `-CorePattern`；F28379D 等双核器件明确选 CPU1/CPU2。`-Variables` 必填，可传逗号分隔的变量、字段或固定下标，例如 `ClAdcCtrl.usResult[0],EPwm1Regs.TBPRD`。脚本在连接前拒绝赋值、函数调用、指针运算等不在简单取值语法内的表达式；`-WaitFor` 可用 `gBootStage == 5` 或 `y1 > 5.8 && y2 > 13.2` 这种只比较读数的条件。直接调用旧入口 `ti_c2000_debug.ps1 -ReadOnly -ReadVars "..."` 也走同一限制。具体名称从当前器件头文件、工程和已有 `.out` 确认。
 
 需要等现有程序到某个状态再取数值时，可加 `-WaitFor "<只读条件>" -RunMs <上限毫秒>`；只读模式在**运行态**反复读条件，不停核、不编译或下载。若目标在连接时已经暂停，报错退出，不自动启动目标。
 

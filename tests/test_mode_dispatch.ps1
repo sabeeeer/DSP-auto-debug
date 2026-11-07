@@ -32,7 +32,24 @@ try {
     if ($LASTEXITCODE -eq 0 -or -not @($conflictOutput | Where-Object { $_ -match '^FAILURE: READONLY_MODE_CONFLICT$' }).Count) {
         throw 'Read-only and build were allowed together'
     }
-    Write-Output 'PASS: build-only never downloads; implicit load and read-only/build conflict rejected'
+
+    # Validation must run before the script searches for CCS or touches JTAG.
+    $badReads = @('gValue=1', 'gValue++', 'functionCall()', '(*f)()', 'gValue ? x : y', 'gValue;foo', 'gArray[gIndex]')
+    foreach ($bad in $badReads) {
+        $badOutput = @(& pwsh -NoProfile -File $debug -ProjectPath $project -ReadOnly -ReadVars $bad 2>&1)
+        if ($LASTEXITCODE -eq 0 -or -not @($badOutput | Where-Object { $_ -match '^FAILURE: READONLY_EXPRESSION_UNSAFE$' }).Count) {
+            throw "Unsafe read expression was accepted: $bad"
+        }
+    }
+    $badWaitOutput = @(& pwsh -NoProfile -File $debug -ProjectPath $project -ReadOnly -ReadVars gValue -WaitFor 'gValue = 1' 2>&1)
+    if ($LASTEXITCODE -eq 0 -or -not @($badWaitOutput | Where-Object { $_ -match '^FAILURE: READONLY_EXPRESSION_UNSAFE$' }).Count) {
+        throw 'Unsafe wait expression was accepted'
+    }
+    $safeOutput = @(& pwsh -NoProfile -File $debug -ProjectPath (Join-Path $fixture 'missing-project') -ReadOnly -ReadVars 'ClAdcCtrl.usResult[0],EPwm1Regs.TBPRD' -WaitFor 'y1 > 5.8 && y2 > 13.2' 2>&1)
+    if (-not @($safeOutput | Where-Object { $_ -match '^FAILURE: NO_PROJECT$' }).Count) {
+        throw 'Safe read expressions were rejected before project lookup'
+    }
+    Write-Output 'PASS: build-only never downloads; implicit load and read-only/build conflict rejected; read-only expressions gated'
     Write-Output 'RESULT: OK'
 } finally {
     if (Test-Path -LiteralPath $fixture) {
