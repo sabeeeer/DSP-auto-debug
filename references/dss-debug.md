@@ -13,6 +13,8 @@
 
 成功看 `RESULT: OK` 与退出码 0，下载还应有 `Done`，运行还应有 `Target running...`。失败先看原始错误、探针/串号、`.ccxml`、供电、目标核和 CCS GUI 是否占用 JTAG；双核与 F28379D 见[器件/探针记录](other-devices-and-probes.md)。
 
+`loadti` 自身有 `-cpu/--cpu-name` 选核参数；本技能包装脚本当前未透传该参数，F28379D 下载前须确认实际加载核。`xds100serial.exe` 可在 `<CCS_ROOT>\ccs_base\common\uscif\` 下列出 XDS100 探针和串号；`dbgjtag.exe` 在同目录用于 JTAG 诊断。识别探针不需要下载程序；`loadti` 则会改变目标状态。
+
 ## DSS 只读入口
 
 ```powershell
