@@ -1,6 +1,6 @@
 # 自动进调试器：loadti 与 DSS 用法（CCS12 实测）
 
-> 两条通道：**loadti**（下载+运行，最简单）与 **DSS**（脚本化会话，可停机读变量）。
+> 两条通道：**loadti**（显式下载+运行）与 **DSS**（脚本化会话，可在运行态实时读变量）。
 > 都由 `scripts/ti_c2000_debug.ps1` 按 `-ReadVars` 是否存在自动选择。
 
 ## 0. 前置
@@ -43,12 +43,12 @@ Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue
 `ti_c2000_debug.ps1` 填好后写到临时文件再执行：
 
 - `MODE=full`：`loadProgram` → `target.restart()` → **轮询就绪** → `halt` → 读表达式 → 继续运行 → 断开
-- `MODE=readonly`：只 `symbol.load()` 解析已有固件符号（不编译、下载）→ 必要时短暂停核 → 读数据值 → 恢复连接时观察到的运行/暂停状态；具体入口见[只读模式](read-only-mode.md)。
+- `MODE=readonly`：连接前关闭 `HaltOnConnect`、`AutoResetOnConnect`、`RestartOnSymbolLoad`、`UseLegacyStopMode`，打开 `AllowInterruptsWhenHalted` 与 `PoliteRealtimeMode` → 只 `symbol.load()` → 在运行态直接读值，不主动 `halt()`、`runAsynch()` 或下载；正式入口是 `scripts/ti_c2000_read_runtime.ps1`，见[只读模式](read-only-mode.md)。本机 CCS12.8 的 `HaltOnConnect` 初始值为 true；临时脚本虽然没有 `halt()`，连接时仍可能停核。
 
 ### 就绪轮询（重要）
 
 原模式跑完立刻读可能拿到 0（本工程 OLED 模拟 I2C 初始化要 ~3.25 s）。模板因此可**每 250 ms 停机采样一次就绪表达式**。
-原模式默认取 `-ReadVars` 的第一项 `!= 0`，也可用 `-WaitFor "<expr>"` 指定（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`）；只读模式默认直接取当前值，需要等待已有程序状态时显式传 `-WaitFor`，全程不编译或下载。
+原模式默认取 `-ReadVars` 的第一项 `!= 0`，也可用 `-WaitFor "<expr>"` 指定（如 `GpioCtrlRegs.GPADIR.bit.GPIO8 != 0`）；只读模式默认直接取当前值，需要等待已有程序状态时显式传 `-WaitFor`，在运行态轮询，不停核、编译或下载。
 命中即打印 `DSS: ready ('...') after N ms` 再正式读值；到预算（默认 8000 ms，`-RunMs` 可改）仍未命中会打印 `WAIT_TIMEOUT` 并采样，脚本默认返回 `RESULT: FAIL`，这些值不能当成就绪后的证据。
 轮询用 `isHalted()` 做保护、静默捕获异常，不会污染失败判定。
 
@@ -142,5 +142,5 @@ volatile Uint16 gBootStage = 0;   /* 0=未进main 1=进main 2=初始化完 … 5
 ## 5. 会话卫生
 
 - 每次运行都新建/关闭 DSS 会话，脚本结束前 `disconnect()` + `server.stop()`，避免占用 JTAG 影响 CCS GUI。
-- `-ReadOnly` 模式不编译、不下载；已有 `.out` 只给调试器加载符号。适合“程序已在板上，只想读取数值”。
-- 读回采样点：目标运行时短暂停核后 `evaluate`，读完恢复；若连接时已暂停则保持暂停。要观察变化可连续多次采样。连接和停核本身可能影响实时性。
+- `-ReadOnly` 模式不编译、不下载；已有 `.out` 只给调试器加载符号。调试器实时选项和固件 `ERTM` 配合使用；若目标已暂停则报错，不自动启动。
+- 运行态 `evaluate` 不提供同一瞬间的多变量原子快照。要观察变化可连续多次采样并记录时间；若读不到，先查实时选项、DBGM、符号与目标核，不退回自动停核。

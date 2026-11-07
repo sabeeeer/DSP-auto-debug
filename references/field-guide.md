@@ -76,9 +76,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps
 #   ... -WaitFor "gBootStage == 5"     ← 5 = 已进主循环（推荐在 main 里埋这种"阶段追踪变量"）
 #   详见 references/dss-debug.md 的「判据怎么选」和「读太早的典型误判清单」
 
-# ④ 只读当前板的数据值：不编译、不下载；具体用法见 references/read-only-mode.md
-pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程根目录>" -ReadOnly -ReadVars "EPwm1Regs.TBCTR"
+# ④ 当前程序运行态直接读值：不编译、不下载、不主动停核；见 references/read-only-mode.md
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "<工程根目录>" -Variables "EPwm1Regs.TBCTR"
 ```
+
+`ti_c2000_debug.ps1 -Build` 单独使用现在只构建，**不会下载**；下载后运行用 `-Build -Run` 或已有 `.out` 的 `-Run`。只有明确指定 `-LoadOnly` 才会下载后暂停。旧脚本无动作参数时曾隐式调用 `loadti -l`，会造成“下载后不运行”的误判；现在会拒绝该调用。
 
 脚本输出英文（避免 PowerShell 中文编码问题），**判定只看 `RESULT: OK` / `RESULT: FAIL`**。
 失败会打印前 25 条错误、错误原因和完整日志路径（`%TEMP%\ti_c2000_build\<工程名>\build.log`）。

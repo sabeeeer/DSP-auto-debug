@@ -1,7 +1,7 @@
 #requires -Version 7.0
 # =====================================================================
 # ti_c2000_debug.ps1
-#   Two modes for TI C2000 in CCS: read-only snapshot of an existing target,
+#   Two modes for TI C2000 in CCS: non-stop realtime read of an existing target,
 #   or the original build/load/run/read-back workflow.
 #
 #   - auto-detects the CCS installation (registry / C:\ti / %USERPROFILE%\ti)
@@ -60,6 +60,22 @@ if ($ReadOnly) {
         Out2 "REASON: -ReadOnly requires -ReadVars; no program will be loaded"
         exit 2
     }
+    if ((@($ReadVars, $WaitFor) | Where-Object { $_ -match '(?<![<>=!])=(?!=)|\+\+|--|;|\b[A-Za-z_]\w*\s*\(' }).Count -gt 0) {
+        Out2 "FAILURE: READONLY_EXPRESSION_UNSAFE"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: read-only expressions must not assign, call functions or mutate target state"
+        exit 2
+    }
+} elseif ($LoadOnly -and ($Run -or $ReadVars)) {
+    Out2 "FAILURE: MODE_CONFLICT"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: -LoadOnly cannot be combined with -Run or -ReadVars"
+    exit 2
+} elseif (-not $Build -and -not $Run -and -not $LoadOnly -and -not $ReadVars) {
+    Out2 "FAILURE: ACTION_REQUIRED"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: choose -Build, -Run, -LoadOnly, -ReadVars or -ReadOnly; no implicit load-only action"
+    exit 2
 }
 
 # ---------- 0. detached mode ----------
@@ -97,7 +113,9 @@ if (-not $ProjectPath) {
         $d = $d.Parent
     }
 }
-if (-not $ProjectPath -or -not (Test-Path (Join-Path $ProjectPath '.cproject'))) {
+if (-not $ProjectPath -or -not (Test-Path -LiteralPath $ProjectPath -PathType Container) -or
+    -not (Test-Path -LiteralPath (Join-Path $ProjectPath '.cproject') -PathType Leaf)) {
+    Out2 "FAILURE: NO_PROJECT"
     Out2 "RESULT: FAIL"; Out2 "REASON: project (.cproject) not found"; exit 2
 }
 $ProjectPath = (Get-Item -LiteralPath $ProjectPath).FullName
@@ -160,13 +178,18 @@ if ($Build) {
     $bout = & $pwshExe @bargs 2>&1
     $bcode = $LASTEXITCODE
     if (-not $Quiet) { $bout | Select-Object -Last 12 | ForEach-Object { Out2 $_ } }
-    if ($bcode -ne 0) {
+    if ($bcode -ne 0 -or -not @($bout | Where-Object { $_ -match '^RESULT: OK\s*$' }).Count) {
         $bfail = @($bout | Where-Object { $_ -match '^FAILURE: ' }) | Select-Object -First 1
         if (-not $bfail) { $bfail = 'FAILURE: BUILD_FAILED' }
         Out2 $bfail
         Out2 "RESULT: FAIL"
         Out2 "REASON: build failed - debugger step aborted (see the build script output / its build.log)"
         exit 1
+    }
+    if (-not $Run -and -not $LoadOnly -and -not $ReadVars) {
+        Out2 "NOTE    : build completed; no download or run requested"
+        Out2 "RESULT: OK"
+        exit 0
     }
 }
 
@@ -276,13 +299,20 @@ if ($ReadVars) {
         $first = ($ReadVars -split ',')[0].Trim()
         if ($first) { $waitExpr = "$first != 0" }
     }
-    $body = $body.Replace('{{CCXML}}', $Ccxml.Replace('\', '\\'))
-    $body = $body.Replace('{{OUT}}',   $OutFile.Replace('\', '\\'))
+    function Escape-JsString([string]$value) {
+        $escaped = $value.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n').Replace("`t", '\t')
+        return [regex]::Replace($escaped, '[^\x00-\x7F]', {
+            param($match)
+            return ('\u{0:X4}' -f [int][char]$match.Value[0])
+        })
+    }
+    $body = $body.Replace('{{CCXML}}', (Escape-JsString $Ccxml))
+    $body = $body.Replace('{{OUT}}',   (Escape-JsString $OutFile))
     $body = $body.Replace('{{RUN_MS}}', [string]$RunMs)
-    $body = $body.Replace('{{VARS}}',  $ReadVars)
+    $body = $body.Replace('{{VARS}}',  (Escape-JsString $ReadVars))
     $body = $body.Replace('{{MODE}}',  $(if ($ReadOnly) { 'readonly' } else { 'full' }))
-    $body = $body.Replace('{{WAIT_EXPR}}', $waitExpr)
-    $body = $body.Replace('{{SESSION_PATTERN}}', $CorePattern)
+    $body = $body.Replace('{{WAIT_EXPR}}', (Escape-JsString $waitExpr))
+    $body = $body.Replace('{{SESSION_PATTERN}}', (Escape-JsString $CorePattern))
     $body | Set-Content -LiteralPath $js -Encoding ASCII
     if ($ReadOnly) { Info2 "STEP    : DSS read-only values (no build/download, wait='$waitExpr')" }
     else { Info2 "STEP    : DSS load/run/read (mode=full, budget=${RunMs}ms, wait='$waitExpr')" }
@@ -296,22 +326,30 @@ if ($ReadVars) {
     if (-not $Quiet) { $dout | ForEach-Object { Out2 $_ } }
     Remove-Item -LiteralPath $js -Force -ErrorAction SilentlyContinue
     $txt      = (($dout | ForEach-Object { [string]$_ }) -join "`n")
-    # per-expression failures are reported as "VAR x = <ERROR: ...>" and are tolerable;
-    # only script-level errors abort the result
+    # A partial read is not a complete result: report failed expressions explicitly.
     $jsErr    = @($dout | Where-Object { $_ -notmatch '^VAR ' -and $_ -notmatch '\(poll\)' -and $_ -match 'uncaught JavaScript|JavaScript runtime|TypeError|Cannot find function|SEVERE|ScriptingException' })
     $varLines = @($dout | Where-Object { $_ -match '^VAR ' -and $_ -notmatch '<ERROR' })
+    $varErrors = @($dout | Where-Object { $_ -match '^VAR .*<ERROR:' })
     $connFail = @($dout | Where-Object { $_ -match 'CONNECT_FAILED' })
-    $readonlyStateError = @($dout | Where-Object { $_ -match '^READONLY_STATE_(ERROR|UNKNOWN):' })
+    $readonlyIssue = @($dout | Where-Object { $_ -match '^READONLY_(STATE_ERROR|STATE_UNKNOWN|CONFIG_ERROR|SYMBOL_ERROR|VALUE_ERROR):' })
+    $fullRunError = @($dout | Where-Object { $_ -match '^FULL_RUN_ERROR:' })
     $timedOut = @($dout | Where-Object { $_ -match 'WAIT_TIMEOUT' })
     $readySeen = ($txt -match 'DSS: ready')
     $doneSeen  = ($txt -match 'DSS: done')
 
     # failure classification - every failure must be named explicitly
     $connectedSeen = ($txt -match 'DSS: connected')
-    if ($ReadOnly -and $readonlyStateError.Count -gt 0) {
-        Out2 "FAILURE: READONLY_STATE_ERROR"
-        Out2 "REASON: read-only snapshot could not preserve the observed target run state"
-        Out2 ($readonlyStateError | Select-Object -First 1)
+    if ($ReadOnly -and $readonlyIssue.Count -gt 0) {
+        Out2 "FAILURE: READONLY_ACCESS_ERROR"
+        Out2 "REASON: non-stop realtime read could not be completed; no program was built or downloaded"
+        Out2 ($readonlyIssue | Select-Object -First 1)
+        Out2 "RESULT: FAIL"
+        exit 1
+    }
+    if (-not $ReadOnly -and $fullRunError.Count -gt 0) {
+        Out2 "FAILURE: TARGET_NOT_RUNNING"
+        Out2 "REASON: program load/read path could not verify that the target resumed"
+        Out2 ($fullRunError | Select-Object -First 1)
         Out2 "RESULT: FAIL"
         exit 1
     }
@@ -334,9 +372,9 @@ if ($ReadVars) {
         Out2 "RESULT: FAIL"
         exit 1
     }
-    if ($dcode -ne 0 -or -not $doneSeen -or $jsErr.Count -gt 0 -or $varLines.Count -eq 0) {
+    if ($dcode -ne 0 -or -not $doneSeen -or $jsErr.Count -gt 0 -or $varLines.Count -eq 0 -or $varErrors.Count -gt 0) {
         Out2 "FAILURE: DSS_SCRIPT_ERROR"
-        Out2 "REASON: DSS session incomplete (exit=$dcode, done=$doneSeen, jsErrors=$($jsErr.Count), valuesRead=$($varLines.Count))"
+        Out2 "REASON: DSS session incomplete (exit=$dcode, done=$doneSeen, jsErrors=$($jsErr.Count), valuesRead=$($varLines.Count), valuesFailed=$($varErrors.Count))"
         Out2 "RESULT: FAIL"
         exit 1
     }
@@ -360,12 +398,13 @@ Info2 ("STEP    : loadti {0}" -f ($ltArgs -join ' '))
 $out = & $loadti @ltArgs 2>&1
 $code = $LASTEXITCODE
 if (-not $Quiet) { $out | Select-Object -Last 25 | ForEach-Object { Out2 $_ } }
-$bad    = @($out | Where-Object { $_ -match 'error|Error|failed|Failed|cannot' })
+$bad    = @($out | Where-Object { $_ -match 'error|failed|cannot|aborted' })
 $ldDone = @($out | Where-Object { $_ -match '\bDone\b' })
-if ($code -ne 0 -or $bad.Count -gt 0 -or $ldDone.Count -eq 0) {
+$runSeen = @($out | Where-Object { $_ -match '^Target running\.\.\.' })
+if ($code -ne 0 -or $bad.Count -gt 0 -or $ldDone.Count -eq 0 -or ($Run -and $runSeen.Count -eq 0)) {
     if ($bad.Count -eq 0) {
         Out2 "FAILURE: LOADTI_TIMEOUT"
-        Out2 "REASON: no 'Done' marker from loadti within $TimeoutSec s - probe/board problem, JTAG busy, or the load really is slower than the timeout"
+        Out2 "REASON: loadti did not confirm load and requested run within $TimeoutSec s (check Done and Target running markers)"
         Out2 "HINT    : raise -TimeoutSec; check probe + board power; make sure the CCS GUI is not holding the JTAG"
     } else {
         Out2 "FAILURE: LOADTI_ERROR"

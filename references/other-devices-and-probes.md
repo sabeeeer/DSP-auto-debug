@@ -170,6 +170,40 @@ VID/PID    Type            Serial #    Description
 
 → 判断为 **v1**，与 `.ccxml` 的 `desc="Texas Instruments XDS100v1 USB Emulator"` 一致，不需要改。
 
+> **⚠️ 2026-11-07 本机实测（一天内插过两块不同探针，踩了两个坑）**
+>
+> 同一天 `xds100serial` 先后输出两块不同的 XDS100：
+>
+> | 时段 | 串号 | Description |
+> |---|---|---|
+> | 上午 | `TI1P9CM8` | Texas Instruments XDS100+RS232 **V1.0** |
+> | 下午 | **`XDS100v2`** | Texas Instruments Inc.XDS100 **Ver 2.0** |
+>
+> **坑 1：换探针后串号一定变，ccxml 里写死的串号立刻失效**
+> 现象是 `Error -151`（错误文本里就有 "invalid XDS100 serial number"），
+> 而不是"探针坏/线坏"。处置：现场跑 `xds100serial` 读当前串号，填进 ccxml 的
+> `Emulator Selection`，**别沿用上一条记录里的串号**。
+>
+> **坑 2：`ti_c2000_set_probe.ps1` 每次重写 ccxml 都会清掉 `Emulator Selection` 串号块**
+> 切完版本必须补回，且必须是当前实物的串号，否则退化成 `-151`（多块历史设备残留时会更乱）。
+>
+> **坑 3（本次最大误判）：`stuck-at-ones` 的真实原因是"仿真器与连接定义不适配"**
+> 上午用 v1 定义去驱动一块 **V2.0 探针**时，`connect` 一直报 `-1135`，
+> `dbgjtag` 显示 `JTAG IR/DR scan-path is stuck-at-ones`；
+> 我当时据此判断成"目标板未上电"，往硬件方向折腾了很久。
+> **实际就是仿真器版本与 ccxml 连接定义不配对**（V2.0 探针必须配 v2 定义）。
+> 结论：看到 `stuck-at-ones` 的第一反应是**核对"仿真器实物版本 ↔ ccxml 连接定义"是否配对**，
+> 而不是先怀疑板子供电 / JTAG 排线；`Description` 的 `Vx.x` 只能作参考，
+> 必须结合探针实物丝印/型号确认。
+>
+> **修正后的处置顺序**：
+> ① `xds100serial` 读当前串号 → ② ccxml 串号填当前值 → ③ v1/v2 各试一次
+> （`ti_c2000_set_probe.ps1 -Probe v1|v2`，切完补串号）
+> → ④ 都失败才查 USB 线 / 板子供电 / JTAG 排线。
+>
+> **补充（同日实测）**：CCS GUI 开着调试会话时，DSS 连同一个探针会报 `-151`
+> （FTDI 打不开），这不是探针故障；跑 DSS 前先关掉 GUI 的调试会话。
+
 **反例（2026-10-27）**：仅凭 `PID_A6D0` 推断成 v2 并建议改 `.ccxml`，是错的。
 两种版本同 PID、同驱动族，CCS 都能连，但 TCK 上限不同；版本写错不会连不上，
 只是跑在较低速率上，所以更容易被忽略。

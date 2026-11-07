@@ -7,7 +7,7 @@
 > TI C2000 / DSP2833x 在 **CCS12 / CCS6** 上的全自动开发 + 调试闭环：
 > 写代码 → 自动编译链接自检（不用打开 CCS 界面）→ 自动下载进调试器运行 → 读回寄存器/变量 → 失败自动分类并给出原因。
 
-技能入口分为三类：**器件与 CCS 工程**、**TI 库与算法**、**调试经验**。先从 `SKILL.md` 选入口，再按需读对应参考文件；以后新增型号、库或故障案例也按这三类维护。
+技能先选**只读运行态读取**或**原有工程修改验证**两种模式，再进入三类共用资料：**器件与 CCS 工程**、**TI 库与算法**、**调试经验**。先从 `SKILL.md` 选入口，再按需读对应参考文件；以后新增型号、库或故障案例也按这三类维护。
 
 已在 **DSP28335 + XDS100v2** 和 **F28379D + XDS100v2** 上完成 CCS12.8.1 硬件实测；
 DSP28335 工程另用 CCS6（ti-cgt-c2000_15.12.1.LTS）完成编译链接实测。
@@ -20,6 +20,7 @@ DSP28335 工程另用 CCS6（ti-cgt-c2000_15.12.1.LTS）完成编译链接实测
 |---|---|
 | 编译 + 链接自检 | `ti_c2000_build.ps1`：包含路径、汇编器版本、内存模型、浮点、输出格式、运行库、链接脚本**全部从 `.cproject` 反推**，换型号不用改脚本 |
 | 自动进调试器 | `ti_c2000_debug.ps1`：自动找 CCS 安装与仿真器 → 下载 → 复位跳到程序入口 → 运行 → 停机 → 读回表达式 |
+| 运行态只读 | `ti_c2000_read_runtime.ps1`：连接前关闭自动停核，启用 DSS 实时模式；只装符号，不编译、下载或主动停核，按变量列表直接读值 |
 | 就绪轮询 | 不再"盲等固定时间"：每 250 ms 采样一次就绪条件，命中即返回（大程序用 `-RunMs` 给上限，如 5 分钟） |
 | 长调试 | `-Background` 自分离运行 + 日志轮询，避免上层命令超时打断 |
 | 失败分类 | 失败必报 `FAILURE: <分类>` + `REASON: <原因>` + 非 0 退出码，绝不把失败说成成功 |
@@ -51,6 +52,7 @@ setup/
 scripts/
   ti_c2000_build.ps1              # 编译 + 链接自检
   ti_c2000_debug.ps1              # 构建 + 下载 + 运行 + 读回（支持后台/超时/核选择）
+  ti_c2000_read_runtime.ps1       # 当前程序运行态直接读变量/寄存器
   dss_template.js                 # DSS 会话模板（占位符由 PS1 填充）
   dss_api_probe.js                # 换 CCS 版本时反射探测真实 DSS API
 ```
@@ -86,6 +88,10 @@ Linux/mac: ~/.codebuddy/skills/ti-c2000-ccs-auto/
 ## 5. 快速开始
 
 ```powershell
+# ⓪ 只读现有程序的运行态数据（不编译、不下载、不主动停核）
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "<工程>" `
+  -Variables "gBootStage,EPwm1Regs.TBPRD"
+
 # ① 只做编译+链接自检（几秒，不需要硬件、不打开 CCS）
 pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<CCS工程根目录>"
 
@@ -99,6 +105,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "<skill>\scripts\ti_c2000_debug.ps
 # ④ 5 分钟级长调试，后台跑
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run -RunMs 300000 -WaitFor "GPIO 状态表达式" -ReadVars "..." -Background
 ```
+
+`ti_c2000_debug.ps1 -Build` 单独使用只构建；下载后启动必须明确指定 `-Run`，只有 `-LoadOnly` 会下载后暂停。
 
 判定只看输出里的 `RESULT: OK` / `RESULT: FAIL`。
 

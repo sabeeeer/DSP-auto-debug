@@ -31,6 +31,7 @@ git clone git@github.com:<owner>/<repo>.git
 |---|---|
 | `scripts/ti_c2000_build.ps1` | 编译+链接自检（不打开 CCS、不碰硬件；认 `RESULT: OK`） |
 | `scripts/ti_c2000_debug.ps1` | 构建 + 下载运行 + 读回变量/寄存器 |
+| `scripts/ti_c2000_read_runtime.ps1` | 对已运行固件只装符号，DSS 实时读取变量/寄存器，不编译、下载或主动停核 |
 | `scripts/c2000ware_find.ps1` | 按外设检索官方例程 |
 | `scripts/check_ram_layout.ps1` | RAM 段占用自检（链接报 `#10099-D` 时用） |
 | `scripts/ti_c2000_set_probe.ps1` | 设置/切换仿真器连接类型 |

@@ -41,3 +41,6 @@ jobs:
       - name: Setup failure semantics
         shell: pwsh
         run: pwsh -NoProfile -File tests/test_setup_failure.ps1
+      - name: Debug mode dispatch
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/test_mode_dispatch.ps1
