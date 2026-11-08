@@ -28,13 +28,13 @@
 | DSP28335 | ADC / 接线判据 | 悬空引脚读数稳定、误判通道损坏、历史 `0.95V` 读数 | 待复核 | [2026-10-27-adc-floating-misjudge](debug-cases/dsp28335/2026-10-27-adc-floating-misjudge.md) |
 | DSP28335 | SolarLib SPLL / 三相 SOGI | sine 型输入的 d/q、硬编码 B0/B1、半拍补偿、DSOGI 正负序分离、不平衡下 vq 纹波 0.262→0.001 pu | 已回归 | [2026-10-27-solarlib-spll-integration](debug-cases/dsp28335/2026-10-27-solarlib-spll-integration.md) |
 | DSP28335 | CCS / SDK 例程构建 | eCAP、`INSTALLROOT_*`、linked resources、通用构建脚本失败 | 已回归（构建适配） | [2026-10-27-sdk-example-build-macros](debug-cases/dsp28335/2026-10-27-sdk-example-build-macros.md) |
-| DSP28335 / XDS100v1 | JTAG / DSS 自动化 | PowerShell 调用 `.bat` 失败、CIM 误报无探针、`xds100serial` | 已回归 | [2026-10-28-dss-batch-probe-preflight](debug-cases/dsp28335/2026-10-28-dss-batch-probe-preflight.md) |
+| DSP28335 / XDS100v1/v2 | JTAG / DSS 自动化 | PowerShell 调用 `.bat` 失败、CIM 误报无探针、`xds100serial`、构建前探针预检 | 待上板回归 | [2026-10-28-dss-batch-probe-preflight](debug-cases/dsp28335/2026-10-28-dss-batch-probe-preflight.md) |
 | DSP28335 | eCAP / GPIO 连通性 | GPIO4 翻转、GPIO24 恒高、eCAP 捕获计数为零、跳线 | 排查中 | [2026-10-28-ecap-gpio24-no-edge](debug-cases/dsp28335/2026-10-28-ecap-gpio24-no-edge.md) |
 | DSP28335 / CCS 12.8 DSS | FPU / 浮点读回 | `expression.evaluate` 截断、浮点显示整数、原始位型、误判超时 | 已回归（读回方法） | [2026-10-28-fpu-dss-float-readback](debug-cases/dsp28335/2026-10-28-fpu-dss-float-readback.md) |
 | DSP28335 / 本机 SDK | FPU software / 工程选项 | 源码写软件浮点、`.cproject` 仍启用 `fpu32`、错误验收 | 待复核 | [2026-10-28-fpu-software-project-options](debug-cases/dsp28335/2026-10-28-fpu-software-project-options.md) |
 | DSP28335 / CCS 12.8 DSS | 实时读 / `loadti` 运行状态 | `HaltOnConnect`、ERTM、只读停核、`-Build` 隐式 `-l`、PC 在 Flash 而 `.out` 在 RAM | 已定位 | [2026-11-07-realtime-read-implicit-loadonly](debug-cases/dsp28335/2026-11-07-realtime-read-implicit-loadonly.md) |
 | DSP28335 / 4-1 两电平逆变器 | ADC 采样链 / 校准 / 探针 / GPIO | `AdcMirror` 对齐、误加 DMA、SOC、通道误判、整流平均、零点、校准超时放波、OLED 引脚、XDS100 串号 | 待复核 | [2026-11-07-adc-chain-port-audit](debug-cases/dsp28335/2026-11-07-adc-chain-port-audit.md) |
-| DSP28335 / 4-1 两电平逆变器 | DSS / 运行态数组读取 | 裸 `connect`、`halt → readData → runAsynch`、继电器释放、`gAdcAllBuf[16][400]`、62516/65012、字寻址 | 待复核 | [2026-11-07-read-halt-bulk-array](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md) |
+| DSP28335 / 4-1 两电平逆变器 | DSS / 运行态数组读取 | 符号错配、重复 `connect`、`-1133`、`halt → readData → runAsynch`、继电器释放、`gAdcAllBuf[16][400]`、6400 点只读实测、62516/65012、字寻址 | 待复核 | [2026-11-07-read-halt-bulk-array](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md) |
 
 新案例按[案例模板](debug-cases/CASE-TEMPLATE.md)记录，原始日志/波形优先保存在对应工程或用户指定位置，案例中写稳定路径与关键读数，避免把大量原始数据复制进技能。
 

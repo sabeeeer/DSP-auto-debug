@@ -25,11 +25,19 @@ param(
     [string]$Ccxml       = "",
     [string]$OutFile     = "",
     [switch]$Build,
+    [switch]$AllowCompilerFallback,
     [switch]$Run,
     [switch]$LoadOnly,
+    [switch]$ProbeCheckOnly,
     [switch]$ReadOnly,
     [int]$RunMs          = 0,
     [string]$ReadVars    = "",
+    [string]$ReadArray   = "",
+    [int]$ArrayRows     = 1,
+    [int]$ArrayColumns  = 0,
+    [int]$ArrayBatchSize = 320,
+    [string]$HeartbeatExpr = "",
+    [int]$ReadTimeoutSec = 300,
     [string]$WaitFor     = "",
     [string]$CorePattern = ".*",
     [switch]$NoProbeCheck,
@@ -46,19 +54,31 @@ function Info2($m) { if (-not $Quiet) { Write-Output $m } }
 
 # Reject incompatible arguments before a background process, build or loader
 # can start. Reading is always a separate non-stop realtime operation.
-if ($ReadVars -and -not $ReadOnly) {
+if (($ReadVars -or $ReadArray) -and -not $ReadOnly) {
     if ($Build -or $Run -or $LoadOnly) {
         Out2 "FAILURE: READ_REQUIRES_SEPARATE_READONLY"
         Out2 "RESULT: FAIL"
-        Out2 "REASON: first build/download/run without -ReadVars; then read the running target with -ReadOnly -ReadVars"
+        Out2 "REASON: first build/download/run; then read the running target in a separate read-only call"
         exit 2
     }
     $ReadOnly = $true
 }
-if ($WaitFor -and -not $ReadVars) {
+if ($WaitFor -and -not ($ReadVars -or $ReadArray)) {
     Out2 "FAILURE: WAIT_REQUIRES_READONLY"
     Out2 "RESULT: FAIL"
     Out2 "REASON: -WaitFor is a read condition; run the program first, then use -ReadOnly -ReadVars -WaitFor"
+    exit 2
+}
+if ($ProbeCheckOnly -and ($Build -or $AllowCompilerFallback -or $Run -or $LoadOnly -or $ReadOnly -or $ReadVars -or $ReadArray -or $NoProbeCheck)) {
+    Out2 "FAILURE: MODE_CONFLICT"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: -ProbeCheckOnly cannot build, access the target or skip the probe check"
+    exit 2
+}
+if ($AllowCompilerFallback -and -not $Build) {
+    Out2 "FAILURE: MODE_CONFLICT"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: -AllowCompilerFallback only applies when -Build is specified"
     exit 2
 }
 if ($ReadOnly) {
@@ -68,10 +88,10 @@ if ($ReadOnly) {
         Out2 "REASON: -ReadOnly cannot be combined with -Build, -Run or -LoadOnly"
         exit 2
     }
-    if ([string]::IsNullOrWhiteSpace($ReadVars)) {
+    if ([string]::IsNullOrWhiteSpace($ReadVars) -and [string]::IsNullOrWhiteSpace($ReadArray)) {
         Out2 "FAILURE: READONLY_NEEDS_READVARS"
         Out2 "RESULT: FAIL"
-        Out2 "REASON: -ReadOnly requires -ReadVars; no program will be loaded"
+        Out2 "REASON: -ReadOnly requires -ReadVars or -ReadArray; no program will be loaded"
         exit 2
     }
     # Only simple data paths may be evaluated against a running target. A
@@ -81,12 +101,23 @@ if ($ReadOnly) {
     $numberPattern = '-?(?:0[xX][0-9A-Fa-f]+|(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)'
     $waitAtom = "(?:$pathPattern)(?:\s*(?:==|!=|<=|>=|<|>)\s*(?:$pathPattern|$numberPattern))?"
     $waitPattern = "^\s*$waitAtom(?:\s*(?:&&|\|\|)\s*$waitAtom)*\s*$"
-    $readNames = @($ReadVars -split ',' | ForEach-Object { $_.Trim() })
+    $readNames = if ($ReadVars) { @($ReadVars -split ',' | ForEach-Object { $_.Trim() }) } else { @() }
     $unsafeRead = @($readNames | Where-Object { $_ -notmatch "^$pathPattern$" })
-    if ($unsafeRead.Count -gt 0 -or ($WaitFor -and $WaitFor -notmatch $waitPattern)) {
+    if ($ReadVars -and $ReadArray) {
+        Out2 "FAILURE: READONLY_MODE_CONFLICT"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: -ReadVars and -ReadArray are separate read modes"
+        exit 2
+    }
+    if ($unsafeRead.Count -gt 0 -or ($WaitFor -and $WaitFor -notmatch $waitPattern) -or
+        ($ReadArray -and $ReadArray -notmatch '^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$') -or
+        ($HeartbeatExpr -and $HeartbeatExpr -notmatch "^$pathPattern$") -or
+        ($ReadArray -and ($ArrayRows -lt 1 -or $ArrayColumns -lt 1 -or $ArrayBatchSize -lt 1 -or
+                         ([long]$ArrayRows * [long]$ArrayColumns) -gt 100000)) -or
+        $ReadTimeoutSec -lt 1 -or $ReadTimeoutSec -gt 3600) {
         Out2 "FAILURE: READONLY_EXPRESSION_UNSAFE"
         Out2 "RESULT: FAIL"
-        Out2 "REASON: read-only values must be simple symbol/field/constant-index paths; -WaitFor may compare them to paths or numbers with &&/||"
+        Out2 "REASON: use simple read paths, positive bounded array dimensions and a 1..3600 s timeout"
         exit 2
     }
 } elseif ($LoadOnly -and $Run) {
@@ -94,7 +125,7 @@ if ($ReadOnly) {
     Out2 "RESULT: FAIL"
     Out2 "REASON: -LoadOnly cannot be combined with -Run"
     exit 2
-} elseif (-not $Build -and -not $Run -and -not $LoadOnly -and -not $ReadVars) {
+} elseif (-not $Build -and -not $Run -and -not $LoadOnly -and -not $ReadVars -and -not $ReadArray -and -not $ProbeCheckOnly) {
     Out2 "FAILURE: ACTION_REQUIRED"
     Out2 "RESULT: FAIL"
     Out2 "REASON: choose -Build, -Run, -LoadOnly or -ReadOnly -ReadVars; no implicit load-only action"
@@ -188,12 +219,75 @@ if ($roots.Count -eq 0) { Out2 "FAILURE: ENV_NO_CCS"; Out2 "RESULT: FAIL"; Out2 
 $ccs = $roots[0]
 Info2 "CCS     : $($ccs.Path)  (v$($ccs.Version))"
 
+function Get-ConnectedProbes {
+    $probePatterns = 'XDS|Texas Instruments.*(Debug|Emulat|Probe)|Debug Probe|Spectrum Digital|Blackhawk|SEGGER|J-Link|ICDI'
+    $found = @()
+    try {
+        $found = @(Get-CimInstance Win32_PnPEntity -ErrorAction Stop 2>$null |
+                   Where-Object { $_.Name -match $probePatterns })
+    } catch { $found = @() }
+    if ($found.Count -eq 0) {
+        $xdsTool = Join-Path $ccs.Path 'ccs_base\common\uscif\xds100serial.exe'
+        if (Test-Path -LiteralPath $xdsTool) {
+            $xdsRows = @(& $xdsTool -l 2>$null | Where-Object { $_ -match '^[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\s+XDS100' })
+            foreach ($row in $xdsRows) { $found += [pscustomobject]@{ Name = $row.Trim() } }
+        }
+    }
+    return @($found)
+}
+
+function Stop-NoProbe {
+    Out2 "PROBE   : NOT FOUND"
+    Out2 "FAILURE: NO_PROBE"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: no JTAG probe enumerated by Windows (checked: XDS*, Spectrum Digital, Blackhawk, SEGGER, Debug Probe)"
+    Out2 "HINT    : connect the probe and target board, then ask the operator before retrying"
+    exit 3
+}
+
+# A hardware run with -Build must stop here if its probe is absent. The
+# compiler must not be invoked first and an agent must not retry until the
+# operator confirms the physical connection. Build-only remains hardware-free.
+if ($ProbeCheckOnly -or ($Build -and ($Run -or $LoadOnly) -and -not $NoProbeCheck)) {
+    $preCcxml = $Ccxml
+    if (-not $preCcxml) {
+        $candidate = Get-ChildItem -Path (Join-Path $ProjectPath 'targetConfigs') -Filter '*.ccxml' -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+        if ($candidate) { $preCcxml = $candidate.FullName }
+    }
+    if (-not $preCcxml -or -not (Test-Path -LiteralPath $preCcxml)) {
+        Out2 "FAILURE: NO_CCXML"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: no .ccxml target configuration found - pass -Ccxml <file>"
+        exit 2
+    }
+    $preIsSim = $false
+    try {
+        [xml]$preConfig = Get-Content -LiteralPath $preCcxml -Raw
+        $preEmu = $preConfig.SelectSingleNode('//configuration/instance[@desc]')
+        if ($preEmu -and [string]$preEmu.desc -match 'simulator|tisim') { $preIsSim = $true }
+    } catch { }
+    if ($preIsSim) {
+        Info2 "PROBE   : skipped (simulator target)"
+    } else {
+        $preProbes = @(Get-ConnectedProbes)
+        if ($preProbes.Count -eq 0) { Stop-NoProbe }
+        foreach ($item in $preProbes) { Info2 ("PROBE   : {0}" -f $item.Name) }
+    }
+    if ($ProbeCheckOnly) {
+        Out2 "RESULT: OK"
+        exit 0
+    }
+}
+
 # ---------- 2. optional build (same toolchain family) ----------
 if ($Build) {
     Info2 "STEP    : build"
     $buildScript = Join-Path $PSScriptRoot 'ti_c2000_build.ps1'
-    $bargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-ProjectPath', $ProjectPath)
+    $bargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-ProjectPath', $ProjectPath, '-KeepLaunches')
     if ($CcsRoot) { $bargs += @('-CcsRoot', $CcsRoot) }
+    if ($AllowCompilerFallback) { $bargs += '-AllowCompilerFallback' }
+    if ($Run -or $LoadOnly) { $bargs += '-Stage' }
     # ★引擎统一：用 PowerShell 7（pwsh）跑子脚本，绝不退回 Windows PowerShell 5.1
     #   （退回 5.1 时 ti_c2000_build.ps1 会因自身 #requires -Version 7.0 直接失败）
     $pwshExe = Join-Path $PSHOME 'pwsh.exe'
@@ -234,6 +328,29 @@ if (-not $Ccxml -or -not (Test-Path -LiteralPath $Ccxml)) {
     Out2 "FAILURE: NO_CCXML"
     Out2 "RESULT: FAIL"; Out2 "REASON: no .ccxml target configuration found - pass -Ccxml <file>"; exit 2
 }
+$loadedMarker = Join-Path $ProjectPath 'Debug\.ti_c2000_loaded.json'
+if ($ReadOnly) {
+    if (Test-Path -LiteralPath $loadedMarker) {
+        try {
+            $loaded = Get-Content -LiteralPath $loadedMarker -Raw | ConvertFrom-Json
+            $currentHash = (Get-FileHash -LiteralPath $OutFile -Algorithm SHA256).Hash
+            if (-not $loaded.outSha256 -or $currentHash -ne [string]$loaded.outSha256) {
+                Out2 'FAILURE: SYMBOL_MISMATCH'
+                Out2 'RESULT: FAIL'
+                Out2 "REASON: $OutFile differs from the last .out loaded by this helper; select matching symbols or verify the current firmware before reading"
+                exit 2
+            }
+            Info2 "SYMBOLS : .out hash matches the last load recorded by this helper"
+        } catch {
+            Out2 'FAILURE: SYMBOL_RECORD_INVALID'
+            Out2 'RESULT: FAIL'
+            Out2 "REASON: cannot validate $loadedMarker; $($_.Exception.Message)"
+            exit 2
+        }
+    } else {
+        Info2 'WARN    : no helper load record; verify that this .out matches the running firmware before trusting RAM symbols'
+    }
+}
 # what device / emulator does this target configuration ask for?
 $ccxmlEmu = ''; $ccxmlDev = ''; $isSim = $false
 try {
@@ -267,24 +384,9 @@ if ($ReadOnly) { Info2 "DSS     : $dss (symbols only)" }
 else { Info2 "LOADTI  : $loadti" }
 
 # ---------- 4. probe / GUI pre-flight ----------
-# probe detection covers TI XDS family (XDS100/110/200/510/560), Spectrum Digital,
-# Blackhawk, SEGGER J-Link and other JTAG probes that ccxml files can reference
-$probePatterns = 'XDS|Texas Instruments.*(Debug|Emulat|Probe)|Debug Probe|Spectrum Digital|Blackhawk|SEGGER|J-Link|ICDI'
 $probe = @()
 if (-not $isSim -and -not $NoProbeCheck) {
-    try {
-        $probe = @(Get-CimInstance Win32_PnPEntity -ErrorAction Stop 2>$null |
-                   Where-Object { $_.Name -match $probePatterns })
-    } catch { $probe = @() }
-    # Some Windows installations reject Win32_PnPEntity even though the USB
-    # emulator is usable. CCS's own enumerator is authoritative for XDS100.
-    if ($probe.Count -eq 0) {
-        $xdsTool = Join-Path $ccs.Path 'ccs_base\common\uscif\xds100serial.exe'
-        if (Test-Path -LiteralPath $xdsTool) {
-            $xdsRows = @(& $xdsTool -l 2>$null | Where-Object { $_ -match '^[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\s+XDS100' })
-            foreach ($row in $xdsRows) { $probe += [pscustomobject]@{ Name = $row.Trim() } }
-        }
-    }
+    $probe = @(Get-ConnectedProbes)
 }
 if ($isSim) {
     Info2 "PROBE   : skipped (simulator target, no hardware needed)"
@@ -292,14 +394,7 @@ if ($isSim) {
 } elseif ($NoProbeCheck) {
     Info2 "PROBE   : check skipped by -NoProbeCheck"
 } elseif ($probe.Count -eq 0) {
-    Out2 "PROBE   : NOT FOUND"
-    Out2 "FAILURE: NO_PROBE"
-    Out2 "RESULT: FAIL"
-    Out2 "REASON: no JTAG probe enumerated by Windows (checked: XDS*, Spectrum Digital, Blackhawk, SEGGER, Debug Probe)"
-    Out2 "HINT    : plug the JTAG probe in and power the target board, then retry"
-    Out2 "HINT    : code-only verification needs no hardware - run ti_c2000_build.ps1 instead"
-    Out2 "HINT2   : a simulator target (tisim) needs no hardware; -NoProbeCheck skips this check"
-    exit 3
+    Stop-NoProbe
 } else {
     foreach ($p in $probe) { Info2 ("PROBE   : {0}" -f $p.Name) }
 }
@@ -308,7 +403,7 @@ if (@(Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue).
 }
 
 # ---------- 5a. DSS path: read-only values or full load/run/read ----------
-if ($ReadVars) {
+if ($ReadVars -or $ReadArray) {
     if (-not (Test-Path $dss)) { Out2 "RESULT: FAIL"; Out2 "REASON: dss.bat not found at $dss"; exit 2 }
     $tpl = Join-Path $PSScriptRoot 'dss_template.js'
     if (-not (Test-Path $tpl)) { Out2 "RESULT: FAIL"; Out2 "REASON: dss_template.js missing"; exit 2 }
@@ -329,6 +424,12 @@ if ($ReadVars) {
     $body = $body.Replace('{{OUT}}',   (Escape-JsString $OutFile))
     $body = $body.Replace('{{RUN_MS}}', [string]$RunMs)
     $body = $body.Replace('{{VARS}}',  (Escape-JsString $ReadVars))
+    $body = $body.Replace('{{ARRAY_NAME}}', (Escape-JsString $ReadArray))
+    $body = $body.Replace('{{ARRAY_ROWS}}', [string]$ArrayRows)
+    $body = $body.Replace('{{ARRAY_COLUMNS}}', [string]$ArrayColumns)
+    $body = $body.Replace('{{ARRAY_BATCH_SIZE}}', [string]$ArrayBatchSize)
+    $body = $body.Replace('{{HEARTBEAT_EXPR}}', (Escape-JsString $HeartbeatExpr))
+    $body = $body.Replace('{{READ_TIMEOUT_MS}}', [string]($ReadTimeoutSec * 1000))
     $body = $body.Replace('{{WAIT_EXPR}}', (Escape-JsString $waitExpr))
     $body = $body.Replace('{{SESSION_PATTERN}}', (Escape-JsString $CorePattern))
     $body | Set-Content -LiteralPath $js -Encoding ASCII
@@ -344,11 +445,11 @@ if ($ReadVars) {
     Remove-Item -LiteralPath $js -Force -ErrorAction SilentlyContinue
     $txt      = (($dout | ForEach-Object { [string]$_ }) -join "`n")
     # A partial read is not a complete result: report failed expressions explicitly.
-    $jsErr    = @($dout | Where-Object { $_ -notmatch '^VAR ' -and $_ -notmatch '\(poll\)' -and $_ -match 'uncaught JavaScript|JavaScript runtime|TypeError|Cannot find function|SEVERE|ScriptingException' })
+    $jsErr    = @($dout | Where-Object { $_ -notmatch '^VAR ' -and $_ -notmatch '^CONNECT_RETRY:' -and $_ -notmatch '\(poll\)' -and $_ -match 'uncaught JavaScript|JavaScript runtime|TypeError|Cannot find function' })
     $varLines = @($dout | Where-Object { $_ -match '^VAR ' -and $_ -notmatch '<ERROR' })
     $varErrors = @($dout | Where-Object { $_ -match '^VAR .*<ERROR:' })
     $connFail = @($dout | Where-Object { $_ -match 'CONNECT_FAILED' })
-    $readonlyIssue = @($dout | Where-Object { $_ -match '^READONLY_(STATE_ERROR|STATE_UNKNOWN|CONFIG_ERROR|SYMBOL_ERROR|VALUE_ERROR):' })
+    $readonlyIssue = @($dout | Where-Object { $_ -match '^READONLY_(STATE_ERROR|STATE_UNKNOWN|CONFIG_ERROR|SYMBOL_ERROR|VALUE_ERROR|HEARTBEAT_ERROR):' })
     $timedOut = @($dout | Where-Object { $_ -match 'WAIT_TIMEOUT' })
     $readySeen = ($txt -match 'DSS: ready')
     $doneSeen  = ($txt -match 'DSS: done')
@@ -364,7 +465,11 @@ if ($ReadVars) {
     }
     if ($connFail.Count -gt 0 -or -not $connectedSeen -or ($dcode -ne 0 -and -not $readySeen -and -not $doneSeen)) {
         Out2 "FAILURE: CONNECT_FAILED"
-        Out2 "REASON: no debug session could be opened/used (invalid ccxml? JTAG busy in the CCS GUI? board not powered? wrong core?)"
+        if ($txt -match 'Error -1133') {
+            Out2 "REASON: CCS -1133: target was executing non-debuggable code during realtime connect; bounded read-only retries did not connect"
+        } else {
+            Out2 "REASON: no debug session could be opened/used (check probe, target power, ccxml/core and other CCS sessions)"
+        }
         if ($connFail.Count -gt 0) { Out2 ($connFail | Select-Object -First 1) }
         $diag = @($dout | Where-Object { $_ -match 'Exception|Error parsing|Fatal Error|Cannot' }) | Select-Object -First 2
         foreach ($d in $diag) { Out2 ("    " + $d) }
@@ -399,30 +504,76 @@ else           { $ltArgs += '-l' }
 $ltArgs += "-t=$($TimeoutSec * 1000)"
 $ltArgs += $OutFile
 Info2 ("STEP    : loadti {0}" -f ($ltArgs -join ' '))
-# ★不要把参数拼成一个字符串交给 cmd /c：PowerShell 7 调用原生 exe 时会按 C 运行库规则
-#   把内嵌引号转义成 \"，而 cmd.exe 不认反斜杠转义 —— 工程路径一旦含空格（如 "...\Working Folder"）
-#   就会得到  '""F:\...\loadti.bat" "-c' is not recognized as an internal or external command，
-#   并被误判成 LOADTI_TIMEOUT。直接以数组传参给 .bat，由 PowerShell 负责加引号。
-$out = & $loadti @ltArgs 2>&1
-$code = $LASTEXITCODE
+# PowerShell 7 can throw StandardOutputEncoding before a .bat starts. Use
+# cmd.exe through ProcessStartInfo so paths containing spaces retain cmd's
+# required quoting; PowerShell's native argument re-quoting is bypassed.
+function Quote-CmdArgument([string]$value) {
+    if ($value -match '["%\r\n]') { throw "unsupported character in loadti path or argument" }
+    return '"' + $value + '"'
+}
+try {
+    $command = (Quote-CmdArgument $loadti) + ' ' + (($ltArgs | ForEach-Object { Quote-CmdArgument $_ }) -join ' ')
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
+    $start.Arguments = '/d /v:off /s /c "' + $command + '"'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($start)
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $waitMs = [int][Math]::Min(2147483647L, ([long]$TimeoutSec * 1000L + 30000L))
+    $expired = -not $process.WaitForExit($waitMs)
+    if ($expired) { $process.Kill($true); $process.WaitForExit() }
+    $out = @((($stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult()) -split '\r?\n') |
+             Where-Object { $_ -ne '' })
+    $code = $process.ExitCode
+    $process.Dispose()
+} catch {
+    Out2 "FAILURE: LOADTI_LAUNCH_ERROR"
+    Out2 "RESULT: FAIL"
+    Out2 "REASON: loadti could not be started: $($_.Exception.Message)"
+    exit 1
+}
 if (-not $Quiet) { $out | Select-Object -Last 25 | ForEach-Object { Out2 $_ } }
 $bad    = @($out | Where-Object { $_ -match 'error|failed|cannot|aborted' })
 $ldDone = @($out | Where-Object { $_ -match '\bDone\b' })
 $runSeen = @($out | Where-Object { $_ -match '^Target running\.\.\.' })
-if ($code -ne 0 -or $bad.Count -gt 0 -or $ldDone.Count -eq 0 -or ($Run -and $runSeen.Count -eq 0)) {
-    if ($bad.Count -eq 0) {
+if ($expired -or $code -ne 0 -or $bad.Count -gt 0 -or $ldDone.Count -eq 0 -or ($Run -and $runSeen.Count -eq 0)) {
+    if ($expired) {
         Out2 "FAILURE: LOADTI_TIMEOUT"
-        Out2 "REASON: loadti did not confirm load and requested run within $TimeoutSec s (check Done and Target running markers)"
-        Out2 "HINT    : raise -TimeoutSec; check probe + board power; make sure the CCS GUI is not holding the JTAG"
-    } else {
+        Out2 "REASON: loadti exceeded its $TimeoutSec s target timeout"
+    } elseif ($code -ne 0 -or $bad.Count -gt 0) {
         Out2 "FAILURE: LOADTI_ERROR"
-        Out2 "REASON: loadti reported an error (probe busy / board power / wrong ccxml)"
+        Out2 "REASON: loadti exited with code $code or reported an error"
         $bad | Select-Object -First 3 | ForEach-Object { Out2 ("    " + $_) }
+    } else {
+        Out2 "FAILURE: LOADTI_INCOMPLETE"
+        Out2 "REASON: loadti exited without the required Done and Target running markers"
     }
     Out2 "RESULT: FAIL"
     exit 1
 }
 if ($LoadOnly) { Out2 "NOTE    : program loaded and halted (no run requested)" }
 elseif ($Run)  { Out2 "NOTE    : program started on target (async run)" }
+try {
+    $record = [ordered]@{
+        outPath = [IO.Path]::GetFullPath($OutFile)
+        outSha256 = (Get-FileHash -LiteralPath $OutFile -Algorithm SHA256).Hash
+        ccxmlPath = [IO.Path]::GetFullPath($Ccxml)
+        mode = if ($Run) { 'run' } else { 'load-only' }
+        loadedAt = (Get-Date).ToString('o')
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path $loadedMarker -Parent) | Out-Null
+    $markerTemp = "$loadedMarker.tmp"
+    $record | ConvertTo-Json | Set-Content -LiteralPath $markerTemp -Encoding UTF8
+    Move-Item -LiteralPath $markerTemp -Destination $loadedMarker -Force
+} catch {
+    Out2 'FAILURE: LOAD_RECORD_ERROR'
+    Out2 'RESULT: FAIL'
+    Out2 "REASON: target load succeeded, but symbol identity record could not be saved: $($_.Exception.Message)"
+    exit 1
+}
 Out2 "RESULT: OK"
 exit 0

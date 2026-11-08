@@ -20,19 +20,26 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" -ProjectPath "
 
 ## 3. 构建、下载、运行
 
-只在确需更新程序时修改工程。编译链接先用下面命令；`-KeepLaunches` 保留工程中的 CCS GUI `.launch` 配置，否则构建脚本会将其备份到临时目录。运行前确认 `<工程>\Debug\auto_build\obj` 只含旧自动产物，因为构建脚本可能清理该目录。
+若任务涉及上板运行或下载，先只检查探针，不启动 CCS 调试会话或编译器：
+
+```powershell
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -ProbeCheckOnly
+```
+
+仅当 `RESULT: OK` 且退出码 0 后继续。若为 `NO_PROBE`，停止并询问用户接线状态，收到回复前不构建、不下载、不自动重试。纯构建任务可直接构建。只在确需更新程序时修改工程。`-KeepLaunches` 保留工程中的 CCS GUI `.launch` 配置，否则构建脚本会将其备份到临时目录。运行前确认 `<工程>\Debug\auto_build\obj` 只含旧自动产物，因为构建脚本可能清理该目录。单独构建默认只把新 `.out` 留在报告的 `OutputDir`，不覆盖 `Debug` 下可能与板上固件匹配的 `.out`。
 
 ```powershell
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程>" -KeepLaunches
 ```
 
-构建成功后，显式下载并启动已构建的 `.out`：
+需要构建并上板运行时，使用同一调用，让脚本明确暂存新 `.out` 后下载：
 
 ```powershell
-pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Run
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程>" -Build -Run
 ```
 
-也可一次用 `ti_c2000_debug.ps1 -Build -Run`；它会调用默认构建流程。`-Build` 单独使用只构建，`-LoadOnly` 明确要求下载后暂停；二者都不能替代运行态读取。源码或 `.cmd` 修改后必须有真实编译链接结果；旧 `.out` 不能充当新构建。每步成功均须 `RESULT: OK` 和退出码 0。
+已有匹配的 `.out` 可只用 `-Run`；若要运行单独构建产生的新文件，明确传 `-OutFile <构建日志中的 out 路径>`。`-Build` 单独使用只构建，`-LoadOnly` 明确要求下载后暂停；二者都不能替代运行态读取。源码或 `.cmd` 修改后必须有真实编译链接结果；旧 `.out` 不能充当新构建。每步成功均须 `RESULT: OK` 和退出码 0。
+`-Build -Run` 内部也会在构建前复查探针。编译器选择先跨已安装的 CCS 查找 `.cproject` 声明的版本；找不到则报 `COMPILER_VERSION_MISSING`。仅在用户明确接受替代版本时使用 `-AllowCompilerFallback`。
 
 ## 4. 运行态复读与判定
 
@@ -47,4 +54,4 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程
 | `TIMEOUT`、读回全零或数值矛盾 | 等待条件、`.out` 身份、运行状态、ADC 对齐和寄存器访问语义；见[只读规则](read-only-mode.md)与[DSS 诊断](dss-debug.md)。 |
 | 波形、串口或外设现场故障 | 从[第三类案例索引](debugging-experience.md)按器件、模块、现象找，不直接推广其他工程的结论。 |
 
-无探针时报告已完成的静态检查和真实构建结果，不声称上板通过。DSP28335 的[官方例程上板范围](board-tests-dsp28335.md)与 F28379D 的[探针/双核记录](other-devices-and-probes.md)分别保留；未验证的外设引脚或负载另行标注。
+无探针时停止上板任务并询问用户；不声称上板通过。DSP28335 的[官方例程上板范围](board-tests-dsp28335.md)与 F28379D 的[探针/双核记录](other-devices-and-probes.md)分别保留；未验证的外设引脚或负载另行标注。

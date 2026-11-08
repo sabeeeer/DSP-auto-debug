@@ -16,13 +16,15 @@
 #     pwsh -ExecutionPolicy Bypass -File ti_c2000_build.ps1 -ProjectPath <proj>
 #     ... -CcsRoot D:\path\to\ccs         force a CCS installation
 #     ... -CompilerRoot <ti-cgt-c2000_x.y.z.LTS>
+#     ... -AllowCompilerFallback          explicitly permit a different installed compiler version
 #     ... -LinkCmd "extra1.cmd,extra2.cmd"  add linker command files
 #     ... -IgnoreExclusions                also build/link resources excluded in .cproject
 #     ... -OutputDir <dir>                 object/map/log location (default: %TEMP%\ti_c2000_build\<proj>;
 #                                          keep it OUTSIDE the project - see the note at step 5)
 #     ... -KeepLaunches                    keep <project>\.launches\*.launch (CCS GUI debug configs,
 #                                          machine-local + absolute paths; default = move them out)
-#     ... -Clean | -Quiet | -NoStage
+#     ... -Stage                          copy the new .out into <project>\Debug (default: keep it in OutputDir)
+#     ... -Clean | -Quiet | -NoStage       -NoStage is retained for older callers
 #   Exit code: 0 = compile AND link OK, 1 = failed, 2 = environment problem
 #
 #   What CCS really builds (and this script mirrors):
@@ -42,16 +44,19 @@ param(
     [string]$ProjectPath  = "",
     [string]$CcsRoot      = "",
     [string]$CompilerRoot = "",
+    [switch]$AllowCompilerFallback,
     [string]$LinkCmd      = "",
     [string]$OutputDir    = "",
     [switch]$Clean,
     [switch]$Quiet,
+    [switch]$Stage,
     [switch]$NoStage,
     [switch]$IgnoreExclusions,
     [switch]$KeepLaunches
 )
 
 $ErrorActionPreference = 'Continue'   # native compiler stderr must not abort the loop
+if ($Stage -and $NoStage) { Write-Output 'FAILURE: MODE_CONFLICT'; Write-Output 'RESULT: FAIL'; Write-Output 'REASON: -Stage and -NoStage cannot be combined'; exit 2 }
 $sw = [Diagnostics.Stopwatch]::StartNew()
 
 function Fail([string]$msg, [int]$code, [string]$failure = 'ENV') {
@@ -254,6 +259,20 @@ if (-not $cgRoot) {
             $cand = Join-Path $root.Path "tools\compiler\ti-cgt-c2000_$cgVersion"
             if (Test-Path (Join-Path $cand 'bin\cl2000.exe')) { $cgRoot = $cand; break }
         }
+    }
+}
+if (-not $cgRoot -and $cgVersion) {
+    foreach ($base in @('C:\ti', "$env:USERPROFILE\ti")) {
+        $match = @(Get-ChildItem $base -Recurse -Directory -Filter "ti-cgt-c2000_$cgVersion" -ErrorAction SilentlyContinue |
+                   Where-Object { Test-Path (Join-Path $_.FullName 'bin\cl2000.exe') }) | Select-Object -First 1
+        if ($match) { $cgRoot = $match.FullName; break }
+    }
+}
+if (-not $cgRoot -and $cgVersion -and -not $AllowCompilerFallback) {
+    Fail ".cproject requires TI C2000 compiler $cgVersion, but it was not found; install that version or explicitly pass -AllowCompilerFallback" 2 'COMPILER_VERSION_MISSING'
+}
+if (-not $cgRoot) {
+    foreach ($root in $ccsRoots) {
         $newest = @(Get-ChildItem (Join-Path $root.Path 'tools\compiler') -Directory -Filter 'ti-cgt-c2000_*' -ErrorAction SilentlyContinue |
                     Sort-Object Name -Descending) | Select-Object -First 1
         if ($newest) {
@@ -586,8 +605,8 @@ if ($renameNote.Count -gt 0) {
 # ---------- 7. link ----------
 $linkErrors = @()
 $outFile = Join-Path $OutputDir "$projName.out"
-# the staged copy stays inside the project on purpose: ti_c2000_debug.ps1 / loadti load it from
-# there, and a lone .out is NOT a link input for the CCS build (unlike .obj/.cmd/.lib)
+# Staging is explicit because overwriting Debug/<project>.out after a build-only
+# run can make its symbols differ from the firmware currently running on target.
 $stagedOut = Join-Path $ProjectPath "Debug\$projName.out"
 if ($compileErrors.Count -eq 0) {
     $objs = @(Get-ChildItem -Path $objDir -Filter '*.obj' | ForEach-Object { $_.FullName })
@@ -646,7 +665,7 @@ Write-Output ("elapsed   : {0:n1} s" -f $sw.Elapsed.TotalSeconds)
 if ($ok) {
     $len = (Get-Item -LiteralPath $outFile).Length
     Write-Output ("out       : {0}  ({1} bytes)" -f $outFile, $len)
-    if (-not $NoStage) {
+    if ($Stage -and -not $NoStage) {
         New-Item -ItemType Directory -Force -Path (Split-Path $stagedOut -Parent) | Out-Null
         Copy-Item -LiteralPath $outFile -Destination $stagedOut -Force
         Write-Output ("staged    : {0}" -f $stagedOut)

@@ -6,8 +6,10 @@
 
 - 不编辑工程/配置，不调用构建脚本，不加 `-Build`、`-Run` 或 `-LoadOnly`，不下载 `.out`，不复位、启动或主动停核。**只读结果异常也不自动切换执行模式。**
 - `-OutFile` 指向**已存在、与当前运行固件匹配**的 `.out`，仅向调试器装载符号，目标程序不被下载。若固件身份/符号不确定，先核对现有构建记录、map/校验值或 CCS 会话；无法确认时停止符号变量的判读，不用“顺手重新编译/下载”解决。
+- 本技能的 `-Run` 会在工程 `Debug/.ti_c2000_loaded.json` 记录已加载 `.out` 的 SHA256；只读调用发现该文件的哈希变化时会在连接前报 `SYMBOL_MISMATCH`。没有记录时会警告，仍须核对板上固件；CCS GUI 或其他工具重新下载不会自动更新这份记录。纯构建默认不覆盖 `Debug` 下的 `.out`。
 - 运行态读取脚本在 `connect()` 前设置 CCS DSS 选项：`HaltOnConnect=false`、`AutoResetOnConnect=false`、`RestartOnSymbolLoad=false`、`UseLegacyStopMode=false`、`AllowInterruptsWhenHalted=true`、`PoliteRealtimeMode=true`。现场 CCS12.8 查询发现 `HaltOnConnect` 默认是 **true**；所以临时脚本即便没有显式 `halt()`，连接时也可能先停核再恢复。固件中的 `ERTM` 清除 C28x 的 DBGM，配合调试器实时选项使用；单靠 `ERTM` 不能代替调试器设置。
 - 目标必须已在运行。若连接后发现已暂停、读数时变成暂停或实时访问失败，脚本报错并不擅自 `runAsynch()`；先核对固件状态和 CCS 连接配置。运行态逐项读取也不构成同一时刻的原子快照，高频变量可跨中断变化。
+- 探针预检存在时，DSS 连接失败最多短间隔重试三次；遇到 `-1133` 会说明目标当时执行不可调试代码。重试仍只尝试实时连接，不停核、不复位、不下载。探针预检缺失会直接停止，需用户接好后再操作。
 - 外设寄存器即使只执行读取，也可能有“读清除”等硬件语义；对状态/中断寄存器先查该器件手册的访问属性。需要观察多变量同一时刻的值时，在固件里准备原子快照或带序号的采样缓冲。
 
 ## 最小命令
@@ -25,16 +27,17 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" `
 
 修改程序后的顺序固定为：先在执行模式执行 `ti_c2000_debug.ps1 -Build -Run`，确认 `RESULT: OK` 与退出码 0；再在本模式读取。旧 `-Build -Run -ReadVars` 会在连接前被拒绝；只传 `-ReadVars` 的旧写法自动转为只读。脚本发现目标已停就报错，不靠 `runAsynch` 恢复。
 
-大量固定数组值用正式分批入口，仍只调用运行态读脚本；例如已由固件录满并冻结的 16×400 ADC 缓冲，只取每通道前 200 帧作 50 Hz、1 kHz 条件下的 10 周期分析：
+大量固定数组值用正式只读数组入口。它在**同一 DSS 会话**中按批检查状态与心跳，避免每批重新 `connect()`。例如已由固件录满并冻结的 16×400 ADC 缓冲，读取全部 400 帧（50 Hz、1 kHz 下的 20 个周期）：
 
 ```powershell
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_array_runtime.ps1" `
-  -ProjectPath "<工程根目录>" -ArrayName gAdcAllBuf -Rows 16 -Columns 200 `
-  -BatchSize 128 -WaitFor "gAdcBufFull == 1" -MinValue 0 -MaxValue 4095 `
+  -ProjectPath "<工程根目录>" -ArrayName gAdcAllBuf -Rows 16 -Columns 400 `
+  -BatchSize 320 -WaitFor "gAdcBufFull == 1" -HeartbeatExpr gRunMs `
+  -ReadTimeoutSec 900 -MinValue 0 -MaxValue 4095 `
   -OutputPath "<新的输出.csv>"
 ```
 
-上例的 `-Columns 200` 生成 `gAdcAllBuf[通道][0..199]` 表达式，不改变 C 数组实际每行 400 元素的步长；需全缓冲时再改为 `-Columns 400`。等待 `gAdcBufFull` 表示现有固件已录满 400 帧并冻结，不代表 200 ms 内完成 JTAG 传输。每批都核对 `RESULT: OK`、退出码、表达式顺序与数量；任何一批失败则整体失败，已读数据留在 `.partial`，不会冒充完整 CSV。每批建立一次非停核 DSS 会话，大数组可能需要较长时间，且不同批次不是原子快照；要求固件先冻结缓冲或提供版本号。不能为了图快改用裸 `connect → halt → readData → runAsynch`。本次事故见[数组读取停核复盘](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md)。
+`-Columns` 只决定读取每行的前多少帧，不改变 C 数组实际每行 400 元素的步长。等待 `gAdcBufFull` 表示固件已录满并冻结，不限制 JTAG 传输时间。每批核对运行状态和心跳；最终还核对退出码、`RESULT: OK`、表达式顺序、数量及码值范围。失败时只保留 `.partial` 与 `.log` 原始记录，不冒充完整 CSV。若固件没有冻结缓冲，跨批数据仍非原子快照。不能改用裸 `connect → halt → readData → runAsynch`；见[数组读取停核复盘](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md)。
 
 例如 F28335 的 ADC 可分别读 `AdcMirror.ADCRESULT0`（右对齐 12 位）与 `AdcRegs.ADCRESULT0`（左对齐结果），先核对当前工程是否使用该结果槽；其它器件按自身寄存器定义。单个 ADC 码值不能判断正弦幅值、通道接线或电压精度。需要趋势时多次独立采样并记录时间；不能靠一次读数做修改结论。
 
