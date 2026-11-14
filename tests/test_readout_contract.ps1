@@ -40,9 +40,9 @@ foreach ($pair in @(@('run_read', $runRead), @('read_dma', $readDma))) {
     # 2. one RESULT line per run
     $okCount = Get-Count $text "Out2 'RESULT: OK'"
     if ($okCount -ne 1) { $problems.Add("${tag}: expected exactly one success RESULT line, found $okCount") }
-    $filterCount = Get-Count $text "-notmatch '^RESULT:'"
+    $filterCount = ([regex]::Matches($text, '-notmatch ''[^'']*RESULT')).Count
     if ($filterCount -lt 2) { $problems.Add("${tag}: child/checker/diagnostic RESULT lines must be filtered, found $filterCount filters") }
-    Test-Contains $text "-notmatch '\^RESULT:'" "${tag}: inner RESULT lines filtered from echoes"
+    Test-Contains $text '\(RESULT' "${tag}: inner RESULT lines filtered from echoes"
 }
 
 # 3. failure must publish a FAIL verdict and clear stale data

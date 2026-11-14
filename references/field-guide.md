@@ -1,10 +1,10 @@
-﻿# 执行模式：工程修改与上板验证
+﻿# 运行模式：工程修改与上板验证
 
 执行顺序：**可行时读现有固件基线 → 分析 → 必要时修改、构建 → 一次加载、运行并在同一 DSS 会话读取验证**。加载前的复位/停核只属于执行模式；程序运行后的读数不得主动停核或再次加载。DSP28335 的 RAM 工程已观察到另起只读读到 Flash 地址，不能用那次读数验收 RAM `.out`。
 
 ## 1. 修改前取证
 
-确认实际工程、器件/核、探针和 `.ccxml`，核对符号 `.out` 与板上运行固件是否匹配。**本用户的调试工程都按 RAM 程序与 RAM 数据处理**，先核对 `.cmd`、`.map` 和当前固件身份。只有此前已验证该组合的独立 DSS 建连/断连不会破坏当前任务，才用下面的独立只读入口取得基线；否则记“基线不可安全取得”，直接规划新固件的单会话读取。独立只读绝不能作为一次已结束下载会话的新 RAM 固件验收。
+确认实际工程、器件/核、探针和 `.ccxml`，核对符号 `.out` 与板上运行固件是否匹配。**本用户的调试工程都按 RAM 程序与 RAM 数据处理**，先核对 `.cmd`、`.map` 和当前固件身份。只有此前已验证该组合的 DSS 建连/断连不会破坏当前任务，才用下面的常驻会话附着读取得基线；否则记“基线不可安全取得”，直接规划新固件的单会话读取。断连后的另起只读绝不能作为一次已结束下载会话的新 RAM 固件验收。
 
 ```powershell
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_run_read.ps1" -ProjectPath "<工程>" -Variables "<变量,寄存器>"
@@ -32,15 +32,22 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_debug.ps1" -ProjectPath "<工程
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_build.ps1" -ProjectPath "<工程>" -KeepLaunches
 ```
 
-需要构建并上板运行，同时验证变量时，把要读的变量一次列齐，让执行模式在同一 DSS 会话完成：
+需要构建、上板运行并验证变量时，先确认用户同意下载，再启动会话（**只加载这一次**）：
+
+```powershell
+pwsh -NoProfile -File "<skill>\scripts\ti_c2000_service.ps1" `
+  -ProjectPath "<工程>" -Start -Build -ConfirmLoad
+```
+
+随后把要读的变量一次列齐，**附着同一会话**读（不重载、不复位）：
 
 ```powershell
 pwsh -NoProfile -File "<skill>\scripts\ti_c2000_run_read.ps1" `
-  -ProjectPath "<工程>" -Build -Variables "<心跳变量>,<ADC或状态变量>" `
+  -ProjectPath "<工程>" -Variables "<心跳变量>,<ADC或状态变量>" `
   -HeartbeatExpr "<该固件实际递增的计数器>" -Rounds 3
 ```
 
-已有匹配的 `.out` 可省略 `-Build` 并显式传 `-OutFile`。每次调用 `ti_c2000_run_read.ps1` 都会重新加载一次；先规划所有变量、轮数和等待时间，不为补读反复调用。固件已冻结 RAM 数组时，沿用 `ti_c2000_read_dma.ps1 -FrozenBufferReady` 在一个会话内加载并搬运；该缓冲可由 ISR 或 DMA 填充。28335 的 `gAdcAllBuf[16][400]` 应显式传 `-ArrayName gAdcAllBuf -Rows 16 -Columns 400 -FrozenFlag gAdcBufFull -SeqVar '' -HeartbeatExpr gRunMs`，并核对 `.out`、范围和数组布局。`ti_c2000_debug.ps1 -Build` 只构建，`-LoadOnly` 会下载后暂停；`-Run` 只下载运行、退出即复位，**不能用于读取**。读取统一用 `run_read` / `read_dma` 的单会话入口。源码或 `.cmd` 修改后必须真实编译链接。每步成功均须 `RESULT: OK` 和退出码 0。
+已有匹配的 `.out` 可省略 `-Build` 并使用现有镜像。读入口默认附着常驻会话，**不再重新加载**；只有会话不在且带了 `-ConfirmLoad` 时才会自启一次，否则 `FAILURE: LOAD_NOT_CONFIRMED`（exit 4）。所以补读同一个变量的不同轮次不需要重新下载，也不该为补读去重启会话。固件已冻结 RAM 数组时，用 `ti_c2000_read_dma.ps1 -FrozenBufferReady` 在同一会话搬运；该缓冲可由 ISR 或 DMA 填充。28335 的 `gAdcAllBuf[16][400]` 应显式传 `-ArrayName gAdcAllBuf -Rows 16 -Columns 400 -FrozenFlag gAdcBufFull -SeqVar '' -HeartbeatExpr gRunMs`，并核对 `.out`、范围和数组布局。`ti_c2000_debug.ps1 -Build` 只构建，`-LoadOnly` 会下载后暂停；`-Run` 只下载运行、退出即复位，**不能用于读取**。读取统一用 `run_read` / `read_dma` 的常驻会话入口。源码或 `.cmd` 修改后必须真实编译链接（并征得用户同意再下载）。每步成功均须 `RESULT: OK` 和退出码 0；输出里的 `LOAD : #N` 要一并记录。
 
 28335 的该缓冲已由源码核对为 ISR 录满后冻结时，单会话命令形状如下；执行前仍须确认当前 `.out` 与板卡、负载状态：
 

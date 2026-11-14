@@ -382,6 +382,16 @@ if ($expired -or $code -ne 0 -or $bad.Count -gt 0 -or $ldDone.Count -eq 0 -or ($
     Out2 "RESULT: FAIL"
     exit 1
 }
+# every successful loadti writes the image to the target: count it, so "LOAD #N"
+# in any later read tells the whole story of how many times this project was flashed
+try {
+    . (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
+    $sha = ''
+    if (Test-Path -LiteralPath $OutFile) { $sha = (Get-FileHash -LiteralPath $OutFile -Algorithm SHA256).Hash }
+    $rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode 'Explicit' -Out $OutFile -Sha256 $sha
+    Info2 ("LOAD    : #{0} (download number {0} for this project)" -f $rec.count)
+} catch { }
+
 if ($LoadOnly) { Out2 "NOTE    : program loaded and halted (no run requested)" }
 elseif ($Run)  { Out2 "NOTE    : program started on target (async run)" }
 Out2 "NOTE    : no values were read here; use ti_c2000_run_read.ps1 for a same-session read"

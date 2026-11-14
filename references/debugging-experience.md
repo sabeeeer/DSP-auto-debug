@@ -38,6 +38,8 @@
 | F28379D / CPU1 / XDS100v2 | DSS / RAM 单会话上板 | `reset()` 返回 -1、加载前 `halt()` 回退、加载一次、运行态心跳递增、断开后状态未在本次复核 | 待复核 | [2026-11-14-dss-single-session-heartbeat](debug-cases/f28379d/2026-11-14-dss-single-session-heartbeat.md) |
 | F28379D / CPU1 / XDS100v2+XDS110 | DSS / 会话边界 | 断开后另起只读、`gMsTick 527→0`、复位跑 Flash、28335 读到 Flash 旧程序、只读入口已删除 | 已定位 | [2026-11-14-disconnect-then-read-is-a-bug](debug-cases/f28379d/2026-11-14-disconnect-then-read-is-a-bug.md) |
 | F28379D / CPU1 / XDS110 | 单会话读取 / 输出契约 | 重复 `RESULT:` 行、失败保留上次 `result: OK`、`-Build` 双 RESULT、心跳失败无 `REASON`、`NO_FROZEN_FLAG` 误报、旧只读脚本强制参数绕过守卫、时间戳目录与 `Tools/out` 镜像、旧只读入口已彻底删除 | 已回归 | [2026-11-14-readout-contract-brute-test](debug-cases/f28379d/2026-11-14-readout-contract-brute-test.md) |
+| F28379D / CPU1 / XDS100v2 | 执行模式 / 常驻会话 | 每次读都重载程序、`gMsTick` 反复归零、两次读数描述两次不同运行、`STALE_SERVICE`、`NO_FROZEN_FLAG`、Rhino varargs 与 `delete` 关键字、`/s /c` 引号、`$rounds` 撞 `-Rounds` | 已上板验证 | [2026-11-14-live-session-service](debug-cases/f28379d/2026-11-14-live-session-service.md) |
+| F28379D / CPU1 / XDS100v2 | 运行模式 / 下载计数 | 自动编译下载打乱数据、频繁烧录伤机器、单步模式必须问用户、连续模式反复下载到数据对、`LOAD_NOT_CONFIRMED`、`RELOAD_BLOCKED`、`ITERATE_NOT_APPROVED`、`load-count.json`、`LOAD #N` | 已回归（脚本层） | [2026-11-14-run-modes-and-load-counter](debug-cases/f28379d/2026-11-14-run-modes-and-load-counter.md) |
 
 新案例按[案例模板](debug-cases/CASE-TEMPLATE.md)记录，原始日志/波形优先保存在对应工程或用户指定位置，案例中写稳定路径与关键读数，避免把大量原始数据复制进技能。
 

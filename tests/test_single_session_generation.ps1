@@ -11,6 +11,7 @@ New-Item -ItemType Directory -Force -Path $scripts, $project, $dssDir, (Join-Pat
 try {
     Copy-Item (Join-Path $root 'scripts/ti_c2000_run_read.ps1') $scripts
     Copy-Item (Join-Path $root 'scripts/ti_c2000_read_dma.ps1') $scripts
+    Copy-Item (Join-Path $root 'scripts/ti_c2000_loadcount.ps1') $scripts
     @'
 param([string]$ProjectPath, [string]$CcsRoot, [switch]$ProbeCheckOnly)
 Write-Output 'RESULT: OK'
@@ -21,6 +22,13 @@ exit 0
     '<config/>' | Set-Content (Join-Path $project 'targetConfigs/target.ccxml') -Encoding UTF8
     'fake' | Set-Content (Join-Path $project 'Debug/DemoImage.out') -Encoding ASCII
 
+    # default path: both readers must attach to the live session, not load again
+    foreach ($name in @('ti_c2000_run_read.ps1', 'ti_c2000_read_dma.ps1')) {
+        $text = Get-Content -LiteralPath (Join-Path $root "scripts/$name") -Raw
+        if ($text -notmatch 'ti_c2000_live_read\.ps1') { throw "$name does not read through the live session by default" }
+        if ($text -notmatch '\$Standalone') { throw "$name lost its -Standalone escape hatch" }
+    }
+
     foreach ($mode in @('scalar','array')) {
         $capture = Join-Path $fixture "$mode.js"
         @"
@@ -30,7 +38,7 @@ echo RESULT: FAIL
 exit /b 1
 "@ | Set-Content (Join-Path $dssDir 'dss.bat') -Encoding ASCII
 
-        $args = @('-NoProfile', '-File', (Join-Path $scripts $(if ($mode -eq 'scalar') {'ti_c2000_run_read.ps1'} else {'ti_c2000_read_dma.ps1'})), '-ProjectPath', $project, '-CcsRoot', $ccs)
+        $args = @('-NoProfile', '-File', (Join-Path $scripts $(if ($mode -eq 'scalar') {'ti_c2000_run_read.ps1'} else {'ti_c2000_read_dma.ps1'})), '-ProjectPath', $project, '-CcsRoot', $ccs, '-Standalone', '-ConfirmLoad')
         if ($mode -eq 'scalar') { $args += @('-Variables', 'gRunMs,ClAdcCtrl.usResult[0]') }
         else { $args += @('-FrozenBufferReady', '-ArrayName', 'gAdcAllBuf', '-Rows', '16', '-Columns', '400', '-FrozenFlag', 'gAdcBufFull', '-FrozenValue', '2', '-SeqVar', '', '-HeartbeatExpr', 'gRunMs', '-Variables', 'gBootStage,EPwm1Regs.TBPRD') }
         $output = @(& pwsh @args 2>&1)

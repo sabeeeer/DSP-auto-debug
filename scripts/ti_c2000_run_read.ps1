@@ -1,17 +1,17 @@
 #requires -Version 7.0
 <#
-ti_c2000_run_read.ps1 -- single-session "run + read while running".
+ti_c2000_run_read.ps1 -- low-speed read of a running session (attach, never reload).
 
-Some targets reset when the JTAG session closes (measured: F28379D + XDS100v2),
-so a separate read-only call can never work. The only way to read a RAM program
-is inside ONE session:
+Default path: attach to the live session started by ti_c2000_service.ps1 and ask
+it for values. No connect, no reset, no loadProgram -- so the numbers describe the
+program that is already running, and repeated reads keep describing the same run.
 
-    connect -> reset (fallback halt) -> loadProgram -> runAsynch
-    -> read N rounds while the target keeps running -> disconnect
+If no session exists, starting one means exactly ONE download. Single-step mode
+refuses to do that unless -ConfirmLoad is passed, and the caller may only pass it
+after the user answered yes to "是否编译下载并运行". Exit code 4 = not confirmed.
 
-Execution mode, not read-only: it loads the program once per invocation. For
-RAM-linked F28335 projects, capture every required scalar in this invocation;
-do not verify a new RAM image by a separate connect after the loader exits.
+- Standalone: emergency one-process load+read (old behaviour). Requires -ConfirmLoad
+  too, because it re-flashes and restarts the target.
 
 Liveness proof (see references/data-read-verdict.md):
   - every readable heartbeat candidate is checked for advancement
@@ -20,6 +20,7 @@ Liveness proof (see references/data-read-verdict.md):
   - -NoHeartbeat disables the check explicitly (not recommended)
 
 Exit code: 0 OK | 1 failure | 2 environment/argument problem | 3 no probe
+           4 load not confirmed by the user (nothing was downloaded)
 #>
 [CmdletBinding()]
 param(
@@ -41,12 +42,19 @@ param(
     [string]$OutRoot = '',
     [switch]$Build,
     [switch]$NoHeartbeat,
-    [switch]$Quiet
+    [switch]$Quiet,
+    # SingleStep protects every download; Iterate is only used by ti_c2000_iterate.ps1
+    [ValidateSet('SingleStep', 'Iterate')][string]$RunMode = 'SingleStep',
+    # pass only after the user said yes to "compile/download and run?"
+    [switch]$ConfirmLoad,
+    # emergency only: run load+read in this one process instead of the live session
+    [switch]$Standalone
 )
 
 $ErrorActionPreference = 'Continue'
 function Out2($m) { Write-Output $m }
 function Info2($m) { if (-not $Quiet) { Write-Output $m } }
+. (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
 
 $names = @($Variables | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($names.Count -eq 0) { Out2 'FAILURE: NEED_VARIABLES'; Out2 'RESULT: FAIL'; Out2 'REASON: -Variables requires at least one expression'; exit 2 }
@@ -88,6 +96,68 @@ $debugScript = Join-Path $skillRoot 'scripts\ti_c2000_debug.ps1'
 if (-not (Test-Path -LiteralPath $debugScript)) { Out2 'FAILURE: ENV_NO_DEBUG_SCRIPT'; Out2 'RESULT: FAIL'; Out2 'REASON: ti_c2000_debug.ps1 is missing from this skill installation'; exit 2 }
 $pwshExe = Join-Path $PSHOME 'pwsh.exe'
 if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
+
+# ---------- default: attach to the one live session (load once, read many) ----------
+# Loading on every call means every call restarts the program, so two reads never
+# describe the same run. The service loads once and keeps running; this reader only
+# asks it for values.
+if (-not $Standalone) {
+    $svcState = Join-Path $ProjectPath 'readout\.service\state.json'
+    $svcReady = Join-Path $ProjectPath 'readout\.service\ready.txt'
+    $live = $false
+    if ((Test-Path -LiteralPath $svcState) -and (Test-Path -LiteralPath $svcReady)) {
+        try {
+            $svc = Get-Content -LiteralPath $svcState -Raw | ConvertFrom-Json
+            $live = [bool](Get-Process -Id ([int]$svc.pid) -ErrorAction SilentlyContinue)
+        } catch { $live = $false }
+    }
+    if (-not $live) {
+        # starting the session IS one download: gate it, never do it silently
+        if ($RunMode -eq 'SingleStep' -and -not $ConfirmLoad) {
+            $cnt = Get-LoadCount -ProjectPath $ProjectPath
+            Out2 'FAILURE: LOAD_NOT_CONFIRMED'; Out2 'RESULT: FAIL'
+            Out2 'REASON: no live session; starting one downloads the image once, and single-step mode never does that on its own'
+            Out2 ('HINT    : ask the user "是否编译下载并运行？" first, then re-run with -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
+            Out2 'HINT    : if a session is already running, plain reads need no confirmation and no download'
+            exit 4
+        }
+        Info2 'STEP    : start the live session (one load, then reads attach to it)'
+        $sargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_service.ps1'),
+            '-ProjectPath', $ProjectPath, '-Start', '-RunMode', $RunMode)
+        if ($Ccxml) { $sargs += @('-Ccxml', $Ccxml) }
+        if ($OutFile) { $sargs += @('-OutFile', $OutFile) }
+        if ($CcsRoot) { $sargs += @('-CcsRoot', $CcsRoot) }
+        if ($CorePattern) { $sargs += @('-CorePattern', $CorePattern) }
+        if ($Build) { $sargs += '-Build' }
+        if ($ConfirmLoad) { $sargs += '-ConfirmLoad' }
+        if ($Quiet) { $sargs += '-Quiet' }
+        $sout = & $pwshExe @sargs 2>&1
+        foreach ($line in $sout) { if ([string]$line -notmatch '^RESULT:') { Out2 ([string]$line) } }
+        if ($LASTEXITCODE -ne 0) {
+            if ($LASTEXITCODE -eq 4) { exit 4 }
+            Out2 'FAILURE: SERVICE_START_FAILED'; Out2 'RESULT: FAIL'
+            Out2 'REASON: could not start the live session; fix the service error above'; exit 1
+        }
+    } elseif ($Build) {
+        Out2 'NOTE    : -Build ignored, the live session already holds a loaded image; restart the service to rebuild'
+    }
+    $largs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_live_read.ps1'),
+        '-ProjectPath', $ProjectPath, '-Variables', ($names -join ','),
+        '-Rounds', [string]$Rounds, '-IntervalMs', [string]$IntervalMs, '-HeartbeatExpr', $HeartbeatExpr)
+    if ($NoHeartbeat) { $largs += '-NoHeartbeat' }
+    if ($Quiet) { $largs += '-Quiet' }
+    & $pwshExe @largs
+    exit $LASTEXITCODE
+}
+
+# ---------- emergency standalone path: this one DOES load ----------
+if (-not $ConfirmLoad) {
+    $cnt = Get-LoadCount -ProjectPath $ProjectPath
+    Out2 'FAILURE: RELOAD_BLOCKED'; Out2 'RESULT: FAIL'
+    Out2 'REASON: -Standalone loads the program again, which restarts the target and invalidates any earlier reading'
+    Out2 ('HINT    : reads normally attach to the live session; if a reload is really intended, confirm with the user and add -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
+    exit 4
+}
 
 $probeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $debugScript, '-ProjectPath', $ProjectPath, '-ProbeCheckOnly')
 if ($CcsRoot) { $probeArgs += @('-CcsRoot', $CcsRoot) }
@@ -315,7 +385,9 @@ if ($dcode -ne 0 -or $text -notmatch 'RESULT: OK' -or $varLines.Count -ne ($name
     Clear-StaleReadout
     Publish-Readout 'FAIL' $failReason $failCode
     Out2 ('FAILURE: ' + $failCode); Out2 ('REASON: ' + $failReason)
-    foreach ($line in (@($dout | Where-Object { [string]$_ -notmatch '^RESULT:' }) | Select-Object -Last 8)) { Out2 ([string]$line) }
+    # the DSS script printed the same FAILURE/REASON pair; echo only the context
+    # lines so one failure is reported once, not twice
+    foreach ($line in (@($dout | Where-Object { [string]$_ -notmatch '^(RESULT|FAILURE|REASON):' }) | Select-Object -Last 8)) { Out2 ([string]$line) }
     Out2 'RESULT: FAIL'
     exit 1
 }
@@ -480,7 +552,9 @@ $pwshExe = Join-Path $PSHOME 'pwsh.exe'
 if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
 $vout = & $pwshExe @vargs 2>&1
 $vcode = $LASTEXITCODE
-foreach ($l in $vout) { if ([string]$l -notmatch '^RESULT:') { Out2 ([string]$l) } }
+# HEARTBEAT was already reported by the live check above; the verdict script
+# re-derives it from the CSV, so printing it again reads like a second result.
+foreach ($l in $vout) { if ([string]$l -notmatch '^(RESULT|HEARTBEAT):') { Out2 ([string]$l) } }
 if ($vcode -ne 0 -or -not @($vout | Where-Object { $_ -match '^RESULT: OK\s*$' }).Count) {
     Publish-Readout 'FAIL' 'mandatory CSV verdict failed' 'FAIL'
     Out2 'FAILURE: VERDICT_FAILED'
@@ -490,5 +564,7 @@ if ($vcode -ne 0 -or -not @($vout | Where-Object { $_ -match '^RESULT: OK\s*$' }
 }
 
 Publish-Readout 'OK' 'mandatory CSV verdict passed' 'OK'
+$rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode 'Standalone' -Out $OutFile -Sha256 $outShaBefore
+Info2 ('LOAD    : #{0} (standalone: this call downloaded the image and restarted the program)' -f $rec.count)
 Out2 'RESULT: OK'
 exit 0

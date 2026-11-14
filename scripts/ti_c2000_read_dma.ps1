@@ -44,12 +44,19 @@ param(
     [string]$CorePattern = '.*C28xx(?:_CPU1)?$',
     [int]$TimeoutSec = 600,
     [switch]$Build,
-    [switch]$Quiet
+    [switch]$Quiet,
+    # SingleStep protects every download; Iterate is only used by ti_c2000_iterate.ps1
+    [ValidateSet('SingleStep', 'Iterate')][string]$RunMode = 'SingleStep',
+    # pass only after the user said yes to "compile/download and run?"
+    [switch]$ConfirmLoad,
+    # emergency only: run load+copy in this one process instead of the live session
+    [switch]$Standalone
 )
 
 $ErrorActionPreference = 'Continue'
 function Out2($m) { Write-Output $m }
 function Info2($m) { if (-not $Quiet) { Write-Output $m } }
+. (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
 
 if (-not ($FrozenBufferReady -or $DmaReady)) {
     Out2 'FAILURE: BUFFER_NOT_CONFIRMED'
@@ -100,6 +107,70 @@ $debugScript = Join-Path $skillRoot 'scripts\ti_c2000_debug.ps1'
 if (-not (Test-Path -LiteralPath $debugScript)) { Out2 'FAILURE: ENV_NO_DEBUG_SCRIPT'; Out2 'RESULT: FAIL'; Out2 'REASON: ti_c2000_debug.ps1 is missing from this skill installation'; exit 2 }
 $pwshExe = Join-Path $PSHOME 'pwsh.exe'
 if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
+
+# ---------- default: attach to the one live session (load once, read many) ----------
+# A reconnecting reader would reset the target and reload the program, so the
+# frozen window it copies would belong to a different run. Attach instead.
+if (-not $Standalone) {
+    $svcState = Join-Path $ProjectPath 'readout\.service\state.json'
+    $svcReady = Join-Path $ProjectPath 'readout\.service\ready.txt'
+    $live = $false
+    if ((Test-Path -LiteralPath $svcState) -and (Test-Path -LiteralPath $svcReady)) {
+        try {
+            $svc = Get-Content -LiteralPath $svcState -Raw | ConvertFrom-Json
+            $live = [bool](Get-Process -Id ([int]$svc.pid) -ErrorAction SilentlyContinue)
+        } catch { $live = $false }
+    }
+    if (-not $live) {
+        # starting the session IS one download: gate it, never do it silently
+        if ($RunMode -eq 'SingleStep' -and -not $ConfirmLoad) {
+            $cnt = Get-LoadCount -ProjectPath $ProjectPath
+            Out2 'FAILURE: LOAD_NOT_CONFIRMED'; Out2 'RESULT: FAIL'
+            Out2 'REASON: no live session; starting one downloads the image once, and single-step mode never does that on its own'
+            Out2 ('HINT    : ask the user "是否编译下载并运行？" first, then re-run with -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
+            Out2 'HINT    : a frozen buffer only exists in the running session - once it is up, reads never download'
+            exit 4
+        }
+        Info2 'STEP    : start the live session (one load, then reads attach to it)'
+        $sargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_service.ps1'),
+            '-ProjectPath', $ProjectPath, '-Start', '-RunMode', $RunMode)
+        if ($Ccxml) { $sargs += @('-Ccxml', $Ccxml) }
+        if ($OutFile) { $sargs += @('-OutFile', $OutFile) }
+        if ($CcsRoot) { $sargs += @('-CcsRoot', $CcsRoot) }
+        if ($CorePattern) { $sargs += @('-CorePattern', $CorePattern) }
+        if ($Build) { $sargs += '-Build' }
+        if ($ConfirmLoad) { $sargs += '-ConfirmLoad' }
+        if ($Quiet) { $sargs += '-Quiet' }
+        $sout = & $pwshExe @sargs 2>&1
+        foreach ($line in $sout) { if ([string]$line -notmatch '^RESULT:') { Out2 ([string]$line) } }
+        if ($LASTEXITCODE -ne 0) {
+            if ($LASTEXITCODE -eq 4) { exit 4 }
+            Out2 'FAILURE: SERVICE_START_FAILED'; Out2 'RESULT: FAIL'
+            Out2 'REASON: could not start the live session; fix the service error above'; exit 1
+        }
+    } elseif ($Build) {
+        Out2 'NOTE    : -Build ignored, the live session already holds a loaded image; restart the service to rebuild'
+    }
+    $largs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_live_read.ps1'),
+        '-ProjectPath', $ProjectPath, '-ArrayName', $ArrayName,
+        '-Rows', [string]$Rows, '-Columns', [string]$Columns,
+        '-FrozenFlag', $FrozenFlag, '-FrozenValue', $FrozenValue, '-SeqVar', $SeqVar,
+        '-HeartbeatExpr', $HeartbeatExpr)
+    if ($ValueMin -ne $null) { $largs += @('-ValueMin', [string][int]$ValueMin) }
+    if ($ValueMax -ne $null) { $largs += @('-ValueMax', [string][int]$ValueMax) }
+    if ($Quiet) { $largs += '-Quiet' }
+    & $pwshExe @largs
+    exit $LASTEXITCODE
+}
+
+# ---------- emergency standalone path: this one DOES load ----------
+if (-not $ConfirmLoad) {
+    $cnt = Get-LoadCount -ProjectPath $ProjectPath
+    Out2 'FAILURE: RELOAD_BLOCKED'; Out2 'RESULT: FAIL'
+    Out2 'REASON: -Standalone loads the program again, so the frozen window would belong to a different run'
+    Out2 ('HINT    : reads normally attach to the live session; if a reload is really intended, confirm with the user and add -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
+    exit 4
+}
 
 $probeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $debugScript, '-ProjectPath', $ProjectPath, '-ProbeCheckOnly')
 if ($CcsRoot) { $probeArgs += @('-CcsRoot', $CcsRoot) }
@@ -394,7 +465,9 @@ Info2 "JS      : $jsPath"
 
 $dout = & cmd.exe /d /c $dss $jsPath 2>&1
 $dcode = $LASTEXITCODE
-foreach ($line in $dout) { if ($line -match '^(DSS:|VAR |EXTRA |BATCH:|CONNECT_RETRY|FAILURE)') { Out2 ([string]$line) } }
+# FAILURE lines are published once below (with a REASON); echoing them here as
+# well made one failure look like two separate failures.
+foreach ($line in $dout) { if ($line -match '^(DSS:|VAR |EXTRA |BATCH:|CONNECT_RETRY)') { Out2 ([string]$line) } }
 Remove-Item -LiteralPath $jsPath -Force -ErrorAction SilentlyContinue
 
 $text = (@($dout | ForEach-Object { [string]$_ }) -join "`n")
@@ -440,7 +513,11 @@ if ($dcode -ne 0 -or $text -notmatch 'RESULT: OK' -or $varLines.Count -ne $total
     elseif ($hbBefore.Count -eq 0 -or $hbAfter.Count -ne $hbBefore.Count) { $failCode = 'NO_LIVENESS_EVIDENCE'; $failReason = 'heartbeat pair missing' }
     Fail-Readout $failCode $failReason
     Out2 ('FAILURE: ' + $failCode); Out2 ('REASON: ' + $failReason)
-    foreach ($line in (@($dout | Where-Object { [string]$_ -notmatch '^RESULT:' }) | Select-Object -Last 8)) { Out2 ([string]$line) }
+    # the DSS script printed the same FAILURE/REASON pair; echo only the context
+    # lines so one failure is reported once, not twice
+    $dupPattern = '^(RESULT|REASON):|^(DSS:|VAR |EXTRA |BATCH:|CONNECT_RETRY)'
+    if ($failCode) { $dupPattern += '|^FAILURE: ' + [regex]::Escape([string]$failCode) + '$' }
+    foreach ($line in (@($dout | Where-Object { [string]$_ -notmatch $dupPattern }) | Select-Object -Last 8)) { Out2 ([string]$line) }
     Out2 'RESULT: FAIL'
     exit 1
 }
@@ -652,5 +729,7 @@ if ($extraOutputPath) {
     }
 }
 Publish-Readout 'OK' 'mandatory array verdict passed' 'OK'
+$rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode 'Standalone' -Out $OutFile -Sha256 $outShaBefore
+Info2 ('LOAD    : #{0} (standalone: this call downloaded the image and restarted the program)' -f $rec.count)
 Out2 'RESULT: OK'
 exit 0
