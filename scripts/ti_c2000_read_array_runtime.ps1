@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 <#
 .SYNOPSIS
     Read a frozen 1-D or 2-D C2000 array in bounded batches without halting,
@@ -14,18 +14,25 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$ProjectPath,
-    [Parameter(Mandatory)][string]$ArrayName,
-    [Parameter(Mandatory)][int]$Columns,
+    [string]$ProjectPath,
+    [string]$ArrayName,
+    [int]$Columns,
     [int]$Rows = 1,
-    [int]$BatchSize = 320,
-    [Parameter(Mandatory)][string]$OutputPath,
+    # measured 2026-11-14: 320 -> 0.331 ms/word, 2000 -> 0.296 ms/word;
+    # larger batches buy little, the limit is JTAG throughput.
+    [int]$BatchSize = 2000,
+    [string]$OutputPath,
     [string]$Ccxml = '',
     [string]$OutFile = '',
     [string]$CcsRoot = '',
-    [string]$CorePattern = '.*',
+    # F28335 single C28xx or F28379D CPU1; neither CPU2 nor CLA1.
+    [string]$CorePattern = '.*C28xx(?:_CPU1)?$',
     [string]$WaitFor = '',
-    [string]$HeartbeatExpr = '',
+    [string]$HeartbeatExpr = 'gMsTick,gRunMs,usMainLoop',
+    [int]$StartupMaxMs = 10000,
+    [switch]$NoHeartbeat,
+    # Force per-element evaluate (slow but works on peripheral registers)
+    [switch]$PointMode,
     [int]$RunMs = 0,
     [int]$ReadTimeoutSec = 900,
     [double]$MinValue,
@@ -41,6 +48,13 @@ function Fail([string]$kind, [string]$reason) {
     exit 1
 }
 
+# Disabled: a separate read-only session cannot prove it reads the current RAM
+# firmware (F28379D resets to Flash; DSP28335 may read a stale Flash program).
+Write-Output 'FAILURE: READONLY_UNRELIABLE'
+Write-Output 'RESULT: FAIL'
+Write-Output 'REASON: use ti_c2000_read_dma.ps1 (DMA frozen buffer) or ti_c2000_run_read.ps1 (low speed, no DMA) in one session'
+exit 2
+
 if ($ArrayName -notmatch '^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$') {
     Fail 'BAD_ARRAY_NAME' 'use a simple array symbol or field path; no expressions or pointer operations'
 }
@@ -52,6 +66,7 @@ $checkMax = $PSBoundParameters.ContainsKey('MaxValue')
 if ($checkMin -and $checkMax -and $MinValue -gt $MaxValue) { Fail 'BAD_VALUE_RANGE' 'MinValue exceeds MaxValue' }
 $total = [long]$Rows * [long]$Columns
 if ($total -gt 100000) { Fail 'ARRAY_TOO_LARGE' 'this helper limits one capture to 100000 values' }
+if ($NoHeartbeat) { $HeartbeatExpr = '' }
 if (Test-Path -LiteralPath $OutputPath) { Fail 'OUTPUT_EXISTS' 'choose a new OutputPath; existing captures are never overwritten' }
 $partial = "$OutputPath.partial"
 if (Test-Path -LiteralPath $partial) { Fail 'PARTIAL_EXISTS' 'an incomplete capture already exists; inspect it before choosing another OutputPath' }
@@ -77,6 +92,9 @@ if ($OutFile) { $forward.OutFile = $OutFile }
 if ($CcsRoot) { $forward.CcsRoot = $CcsRoot }
 if ($WaitFor) { $forward.WaitFor = $WaitFor }
 if ($HeartbeatExpr) { $forward.HeartbeatExpr = $HeartbeatExpr }
+if ($StartupMaxMs -gt 0) { $forward.StartupMaxMs = $StartupMaxMs }
+if ($NoHeartbeat) { $forward.NoHeartbeat = $true }
+if ($PointMode) { $forward.PointMode = $true }
 if ($RunMs -gt 0) { $forward.RunMs = $RunMs }
 if ($NoProbeCheck) { $forward.NoProbeCheck = $true }
 

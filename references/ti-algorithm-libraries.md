@@ -42,3 +42,23 @@ pwsh -NoProfile -File "<skill>\scripts\c2000ware_find.ps1" -SdkRoot "F:\c2000war
 3. 能复用时优先写薄适配层；确需自研时，记录查过哪些库、为什么不适用及对照验证办法。交付时说明库版本、具体源路径、参数/系数来源与构建结果。
 
 **PLL 名称辨别**：本机 Core SDK 的 `libraries/` 清单中没有 SolarLib SPLL；处理电网 PLL、SOGI、SRF/DDSRF 时使用上面的 SolarLib 入口及 [SPLL 专题](spll-pll-algorithms.md)，核对实际 TI 源码与工程适配层；片内时钟 PLL 则按第一类查器件例程。
+
+## 正弦 / 波形生成：先看器件有没有 TMU
+
+| 方案 | 适用器件 | 每次调用代价 | 说明 |
+|---|---|---|---|
+| **`__sinpuf32()` TMU** | 当前器件与编译器支持 TMU 时 | 本次反汇编为 1 条 `SINPUF32`；TI 资料给出 1 周期发射、4 周期结果延迟 | 输入 per-unit 角（1.0 = 2π）；需相应 `--tmu_support`，按工程编译结果核对 |
+| `__sin()` | 同上 | `DIV2PIF32` + `SINPUF32` | 输入弧度；需 `--fp_mode=relaxed` 且 `--tmu_support` |
+| **离线查表** | 包括无 TMU 的 F28335 | 查表及可选插值，成本随实现变化 | 表长度按精度、RAM 与插值方式选；改输出频率通常只改相位增量 |
+| IQmath `_IQsin` | 工程链接的 IQmath 版本支持时 | 依赖 Q 格式与库实现 | F28335 可考虑，需核对版本、精度与周期预算 |
+| `sinf()` 库调用 | 工程所用编译器与运行库支持时 | 本次严格模式反汇编为库调用；周期数须实测 | 是否满足 ISR 预算由目标采样率、优化级别与实测决定 |
+
+要点：
+- **F28335 没有 TMU**。正弦可比较查表、IQmath 和 `sinf()` 的误差与周期预算，按本工程采样率选择。
+- 用 TMU 的工程必须在 `.cproject` 里选 TMU（`--tmu_support=tmu0`），并且**命令行构建也要传这个选项**，
+  否则本次工程曾出现 `___sinpuf32 unresolved`；具体报错和反汇编见[坑表 §九](c28x-pitfalls.md)。
+- 判断"到底编译成了什么"用 `dis2000` 反汇编核对，别看源码猜（同 [坑表 §九](c28x-pitfalls.md)）。
+- SPWM 里正弦的用法：相位用 per-unit 累加（每次更新加 `Fmod/Fupdate`），`duty = 0.5 + 0.5·m·sin`，
+  改调制波频率只改相位增量，不需要重新生成表。
+
+TI 依据：[C28x 优化指南：TMU 编译选项](https://software-dl.ti.com/C2000/docs/optimization_guide/phase1/compiler_options.html)、[F2837xD TMU 指令吞吐与延迟](https://software-dl.ti.com/trainingTTO/trainingTTO_public_sw/F2837xD/C28x_Microcontroller_ODW_2-0.pdf)。

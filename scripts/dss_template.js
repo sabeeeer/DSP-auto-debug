@@ -1,7 +1,8 @@
 /*
  * DSS template for reading an already running C2000 target. The wrapper fills
  * {{CCXML}}, {{OUT}}, {{RUN_MS}}, {{VARS}}, {{WAIT_EXPR}} and
- * {{SESSION_PATTERN}}. Program loading belongs to ti_c2000_debug.ps1 -Run.
+ * {{SESSION_PATTERN}}. Loading and same-session verification belong to the
+ * execution-mode ti_c2000_run_read.ps1 / ti_c2000_read_dma.ps1 scripts.
  *
  * This file intentionally has no target halt, reset, restart or resume path.
  * Configure the DSS connection before connect; a halted target is a failure.
@@ -19,7 +20,12 @@ var ARRAY_NAME = "{{ARRAY_NAME}}";
 var ARRAY_ROWS = {{ARRAY_ROWS}};
 var ARRAY_COLUMNS = {{ARRAY_COLUMNS}};
 var ARRAY_BATCH_SIZE = {{ARRAY_BATCH_SIZE}};
-var HEARTBEAT_EXPR = "{{HEARTBEAT_EXPR}}";
+/* Candidate list (comma separated). The first readable one becomes the
+   heartbeat; if none can be read the read fails unless -NoHeartbeat was used. */
+var HEARTBEAT_CANDIDATES = "{{HEARTBEAT_EXPR}}".split(",");
+/* 1 = batched memory.readData (fast), 0 = per-element evaluate (point mode,
+   works on any symbol including peripheral registers) */
+var USE_BATCH = {{USE_BATCH}};
 var READ_TIMEOUT_MS = {{READ_TIMEOUT_MS}};
 
 function sleepMs(ms) {
@@ -42,25 +48,74 @@ function requireRunning(session, stage) {
         throw "target is halted";
     }
 }
-function readHeartbeat(session, stage) {
-    try { return "" + session.expression.evaluate(HEARTBEAT_EXPR); }
-    catch (e) {
-        print("READONLY_HEARTBEAT_ERROR: " + stage + ": " + e);
-        throw "heartbeat read failed";
-    }
+function toNum(v) {
+    var s = "" + v;
+    if (s.length === 0) { return null; }
+    var n = Number(s);
+    return isNaN(n) ? null : n;
 }
-function requireHeartbeatAdvance(session, before, stage) {
-    var after = readHeartbeat(session, stage);
-    if (after === before) {
+/* Strictly increasing for numeric heartbeats; "changed" for non numeric ones. */
+function isAdvance(before, after) {
+    var nb = toNum(before), na = toNum(after);
+    if (nb !== null && na !== null) { return na > nb; }
+    return after !== before;
+}
+/* Every readable candidate becomes a heartbeat. One readable counter is a weak
+   proof (a stale or coincidental variable passes); several must all advance,
+   so a single stale variable cannot carry the verdict on its own. */
+var HEARTBEATS = [];
+function selectHeartbeats(session) {
+    HEARTBEATS = [];
+    for (var i = 0; i < HEARTBEAT_CANDIDATES.length; i++) {
+        var c = HEARTBEAT_CANDIDATES[i].replace(/^\s+|\s+$/g, "");
+        if (c.length === 0) { continue; }
+        try {
+            var v = session.expression.evaluate(c);
+            HEARTBEATS.push(c);
+            print("DSS: heartbeat candidate '" + c + "' = " + v);
+        } catch (e) { }
+    }
+    if (HEARTBEATS.length === 0) { return null; }
+    print("DSS: heartbeats used = " + HEARTBEATS.join(","));
+    return HEARTBEATS.slice();
+}
+function readHeartbeats(session, stage) {
+    var out = {};
+    for (var i = 0; i < HEARTBEATS.length; i++) {
+        var name = HEARTBEATS[i];
+        try { out[name] = "" + session.expression.evaluate(name); }
+        catch (e) {
+            print("READONLY_HEARTBEAT_ERROR: " + name + " " + stage + ": " + e);
+            throw "heartbeat read failed";
+        }
+    }
+    return out;
+}
+function requireHeartbeatsAdvance(session, before, stage) {
+    var after = readHeartbeats(session, stage);
+    var allAdvanced = true;
+    for (var i = 0; i < HEARTBEATS.length; i++) {
+        if (!isAdvance(before[HEARTBEATS[i]], after[HEARTBEATS[i]])) { allAdvanced = false; }
+    }
+    if (!allAdvanced) {
         sleepMs(50);
         requireRunning(session, "during heartbeat retry");
-        after = readHeartbeat(session, stage + " retry");
+        after = readHeartbeats(session, stage + " retry");
+        allAdvanced = true;
+        for (var j = 0; j < HEARTBEATS.length; j++) {
+            if (!isAdvance(before[HEARTBEATS[j]], after[HEARTBEATS[j]])) { allAdvanced = false; }
+        }
     }
-    if (after === before) {
-        print("READONLY_HEARTBEAT_ERROR: " + HEARTBEAT_EXPR + " did not advance " + stage);
+    for (var k = 0; k < HEARTBEATS.length; k++) {
+        var hn = HEARTBEATS[k];
+        print("HB " + hn + " before = " + before[hn]);
+        print("HB " + hn + " after = " + after[hn]);
+        print("DSS: heartbeat " + hn + " " + stage + " " + before[hn] + " -> " + after[hn]);
+    }
+    if (!allAdvanced) {
+        print("READONLY_HEARTBEAT_ERROR: not all heartbeats increased " + stage);
         throw "application heartbeat did not advance";
     }
-    print("DSS: heartbeat advanced " + stage + " (" + before + " -> " + after + ")");
     return after;
 }
 
@@ -110,6 +165,17 @@ try {
     print("DSS: symbols loaded (readonly, no program download)");
     requireRunning(session, "during symbol load");
 
+    /* Default heartbeat: first readable expression from the candidate list.
+       None readable -> fail unless the caller explicitly used -NoHeartbeat. */
+    var hbInitial = null;
+    if (HEARTBEAT_CANDIDATES.length > 0 && HEARTBEAT_CANDIDATES[0].length > 0) {
+        hbInitial = selectHeartbeats(session);
+        if (hbInitial === null) {
+            print("READONLY_NO_HEARTBEAT: none of '" + HEARTBEAT_CANDIDATES.join(",") + "' could be read");
+            throw "no heartbeat variable available";
+        }
+    }
+
     if (WAIT_EXPR.length > 0) {
         var waited = 0;
         var ready = false;
@@ -138,38 +204,75 @@ try {
     print("DSS: running - reading expressions");
     if (ARRAY_NAME.length > 0) {
         var total = ARRAY_ROWS * ARRAY_COLUMNS;
-        var heartbeat = "";
-        if (HEARTBEAT_EXPR.length > 0) {
-            heartbeat = readHeartbeat(session, "before array capture");
+        var heartbeat = null;
+        if (HEARTBEATS.length > 0) {
+            heartbeat = readHeartbeats(session, "before array capture");
             sleepMs(50);
             requireRunning(session, "before array capture heartbeat check");
-            heartbeat = requireHeartbeatAdvance(session, heartbeat, "before array capture");
+            heartbeat = requireHeartbeatsAdvance(session, heartbeat, "before array capture");
+        }
+        /* Batched readData is ~39x faster than per-element evaluate
+           (measured 2026-11-14: 14.0 ms per evaluate vs 0.36 ms per 16-bit
+           word; DSS typeSize is a BIT width, not bytes: 16/32 only; page=1
+           works for RAM; address advances per C28x 16-bit word).
+           Fall back to per-element evaluate if the symbol address cannot be
+           resolved or readData rejects the request (e.g. peripheral frame). */
+        var arrayBase = null;
+        try { arrayBase = Number(session.symbol.getAddress(ARRAY_NAME)); } catch (eBase) { arrayBase = null; }
+        if (arrayBase === null || arrayBase === undefined || isNaN(arrayBase)) {
+            print("DSS: array base address unavailable, using per-element evaluate");
+        } else {
+            print("DSS: array base address = " + arrayBase + " (batched readData)");
         }
         for (var offset = 0; offset < total; offset += ARRAY_BATCH_SIZE) {
             var count = Math.min(ARRAY_BATCH_SIZE, total - offset);
-            requireRunning(session, "before array batch " + (offset / ARRAY_BATCH_SIZE + 1));
-            for (var j = 0; j < count; j++) {
-                var linear = offset + j;
-                var row = Math.floor(linear / ARRAY_COLUMNS);
-                var column = linear % ARRAY_COLUMNS;
-                var name = ARRAY_ROWS === 1 ? ARRAY_NAME + "[" + column + "]" :
-                           ARRAY_NAME + "[" + row + "][" + column + "]";
-                try {
-                    print("VAR " + name + " = " + session.expression.evaluate(name));
-                } catch (e4) {
-                    print("VAR " + name + " = <ERROR: " + e4 + ">");
-                    print("READONLY_VALUE_ERROR: array element read failed: " + name);
-                    throw "array element read failed";
+            var batchNo = Math.floor(offset / ARRAY_BATCH_SIZE) + 1;
+            requireRunning(session, "before array batch " + batchNo);
+            var vals = null;
+            if (USE_BATCH === 1 && arrayBase !== null && arrayBase !== undefined) {
+                try { vals = session.memory.readData(1, arrayBase + offset, 16, count); }
+                catch (eRd) {
+                    print("DSS: readData failed, falling back to evaluate: " + eRd);
+                    arrayBase = null;
+                    vals = null;
                 }
             }
-            requireRunning(session, "after array batch " + (offset / ARRAY_BATCH_SIZE + 1));
-            if (HEARTBEAT_EXPR.length > 0) {
-                heartbeat = requireHeartbeatAdvance(session, heartbeat, "after array batch " + (offset / ARRAY_BATCH_SIZE + 1));
+            if (vals !== null && vals !== undefined && vals.length === count) {
+                for (var j = 0; j < count; j++) {
+                    var linear = offset + j;
+                    var row = Math.floor(linear / ARRAY_COLUMNS);
+                    var column = linear % ARRAY_COLUMNS;
+                    var name = ARRAY_ROWS === 1 ? ARRAY_NAME + "[" + column + "]" :
+                               ARRAY_NAME + "[" + row + "][" + column + "]";
+                    print("VAR " + name + " = " + vals[j]);
+                }
+            } else {
+                for (var j2 = 0; j2 < count; j2++) {
+                    var linear2 = offset + j2;
+                    var row2 = Math.floor(linear2 / ARRAY_COLUMNS);
+                    var column2 = linear2 % ARRAY_COLUMNS;
+                    var name2 = ARRAY_ROWS === 1 ? ARRAY_NAME + "[" + column2 + "]" :
+                                ARRAY_NAME + "[" + row2 + "][" + column2 + "]";
+                    try {
+                        print("VAR " + name2 + " = " + session.expression.evaluate(name2));
+                    } catch (e4) {
+                        print("VAR " + name2 + " = <ERROR: " + e4 + ">");
+                        print("READONLY_VALUE_ERROR: array element read failed: " + name2);
+                        throw "array element read failed";
+                    }
+                }
             }
-            print("BATCH: " + (Math.floor(offset / ARRAY_BATCH_SIZE) + 1) +
-                  " values=" + count + " endIndex=" + (offset + count - 1));
+            requireRunning(session, "after array batch " + batchNo);
+            if (HEARTBEATS.length > 0) {
+                heartbeat = requireHeartbeatsAdvance(session, heartbeat, "after array batch " + batchNo);
+            }
+            print("BATCH: " + batchNo + " values=" + count + " endIndex=" + (offset + count - 1));
         }
     } else {
+        var hbBefore = null;
+        if (HEARTBEATS.length > 0) {
+            hbBefore = readHeartbeats(session, "before value read");
+        }
         for (var i = 0; i < VARS.length; i++) {
             var name = VARS[i].replace(/^\s+|\s+$/g, "");
             if (name.length === 0) { continue; }
@@ -180,6 +283,9 @@ try {
             } catch (e5) {
                 print("VAR " + name + " = <ERROR: " + e5 + ">");
             }
+        }
+        if (HEARTBEATS.length > 0) {
+            requireHeartbeatsAdvance(session, hbBefore, "after value read");
         }
     }
     requireRunning(session, "after runtime read");

@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 <#
 Read values from an already running C2000 target without building, downloading,
 resetting or issuing a halt. The versioned DSS template configures CCS realtime
@@ -10,17 +10,28 @@ Example:
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$ProjectPath,
-    [Parameter(Mandatory)][Alias('ReadVars')][string[]]$Variables,
+    [string]$ProjectPath,
+    [Alias('ReadVars')][string[]]$Variables,
     [string]$Ccxml = '',
     [string]$OutFile = '',
     [string]$CcsRoot = '',
-    [string]$CorePattern = '.*',
+    # F28335 single C28xx or F28379D CPU1; neither CPU2 nor CLA1.
+    [string]$CorePattern = '.*C28xx(?:_CPU1)?$',
+    [string]$HeartbeatExpr = 'gMsTick,gRunMs,usMainLoop',
+    [int]$StartupMaxMs = 10000,
+    [switch]$NoHeartbeat,
     [string]$WaitFor = '',
     [int]$RunMs = 0,
     [switch]$NoProbeCheck,
     [switch]$Quiet
 )
+
+# Disabled: a separate read-only session cannot prove it reads the current RAM
+# firmware (F28379D resets to Flash; DSP28335 may read a stale Flash program).
+Write-Output 'FAILURE: READONLY_UNRELIABLE'
+Write-Output 'RESULT: FAIL'
+Write-Output 'REASON: use ti_c2000_run_read.ps1 (low speed, no DMA) or ti_c2000_read_dma.ps1 (DMA frozen buffer) in one session'
+exit 2
 
 $names = @($Variables | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($names.Count -eq 0) {
@@ -47,6 +58,9 @@ $forward = @{
 if ($Ccxml) { $forward.Ccxml = $Ccxml }
 if ($OutFile) { $forward.OutFile = $OutFile }
 if ($CcsRoot) { $forward.CcsRoot = $CcsRoot }
+if ($HeartbeatExpr) { $forward.HeartbeatExpr = $HeartbeatExpr }
+if ($StartupMaxMs -gt 0) { $forward.StartupMaxMs = $StartupMaxMs }
+if ($NoHeartbeat) { $forward.NoHeartbeat = $true }
 if ($WaitFor) { $forward.WaitFor = $WaitFor }
 if ($RunMs -gt 0) { $forward.RunMs = $RunMs }
 if ($NoProbeCheck) { $forward.NoProbeCheck = $true }

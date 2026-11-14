@@ -32,7 +32,7 @@
   自动检测到 CCS12 安装目录、用 22.6.1 构建、DSS 连接 XDS100、加载、`target.restart()`、运行、停机读回：
   `TBPRD=65535`、`CMPA.all=0xCCCC0000`(即 CMPA=0xCCCC=52428=65535×80%)、`TBCTL.CLKDIV=3`、
   `GPADIR.bit.GPIO8=1`(OLED 初始化已执行)、`GPAMUX1.bit.GPIO0=1`(EPWM1A 复用已配置)、`SCILBAUD=39`(115200bps)
-  → 当时与 `User/main.c` 逐项吻合，但该命令现在会被拒绝，因为读回曾主动停核。当前流程是先 `-Build -Run`，随后单独 `ti_c2000_read_runtime.ps1 -Variables "PC,EPwm1Regs.TBPRD,..."`，不能直接复制旧命令。
+  → 当时与 `User/main.c` 逐项吻合，但该命令现在会被拒绝，因为读回曾主动停核。**当前新 RAM 固件的验收**用 `ti_c2000_run_read.ps1` 在单一 DSS 会话中加载、运行、读取；上述历史数值和旧命令不能直接复制。
 - **无仿真器时**：`ti_c2000_debug.ps1` 会打印 `PROBE : NOT FOUND` + 中文提示并返回退出码 3。
 - **F28379D + XDS100v2 实机闭环（2026-10-10 实测成功）**：
   CCS12.8.1 + `f28379d.xml` 目标定义 + XDS100v2 序列号 `TI90I42A`；
@@ -50,7 +50,7 @@
 2. 工程里原有的 `Debug/makefile` 是 **CCS12（`<CCS_ROOT>/tools/compiler/ti-cgt-c2000_22.6.1.LTS`）** 生成的（不是"别的机器拷来的"）。
    这些自动生成的 `*.mk` 已被清掉，CCS 下次构建会自己重新生成；若 GUI 报找不到编译器，看 `Debug/makefile` 的 `CG_TOOL_ROOT`。
 3. **RAM 程序 + 复位**：板上复位后默认跑的是**Flash 里的旧程序**（实测读到它配的 `TBPRD=7500`/`CLKDIV=0`）。
-   所以历史 DSS `loadProgram()` 路径还需处理 PC 入口；**当前运行态读取模板已删除该路径**。更新程序用前一步 `ti_c2000_debug.ps1 -Run` 下载并运行，读数只用只读模式。
+   所以历史 DSS `loadProgram()` 路径还需处理 PC 入口；**当前运行态读取模板已删除该路径**。更新程序用前一步 `ti_c2000_debug.ps1 -Run` 下载并运行；读数必须在同一会话内用 `ti_c2000_run_read.ps1` 或 `ti_c2000_read_dma.ps1`，**断开后禁止再读**。
 4. **读回时序（最容易误判的一条，已用轮询解决）**：本工程带 OLED 模拟 I2C，`OLED_Init` 清屏 + 4 行字符串要**约 3.25 秒**才跑完。
    实测多采样：t=1/2/3 s 时 PC 停在 `oled.o` 的延时循环里、`TBPRD=0`；**t=4 s 起** `TBPRD=65535`、`PCLKCR1=1`、`SCILBAUD=39` 并保持稳定（程序是确定性的，不是被反复复位）。
    因此当前只读模板可用 `-WaitFor` **每 250 ms 在运行态检查一次**，命中才采样；

@@ -1,50 +1,41 @@
-# 只读模式：运行态实时读取，不构建、下载或主动停核
+# 单会话读取规则（旧「独立只读模式」已废弃）
 
-适用：用户要**读取现有程序**的参数、ADC 值、变量或寄存器，或先核对板上状态再决定是否改代码。先从[第一类](device-platform.md)确认器件、目标核、探针和 `.ccxml`；读取算法参数时查[第二类](ti-algorithm-libraries.md)的结构体/单位，解释异常时查[第三类](debugging-experience.md)。这三类与执行模式共用。
+**硬性规则：仿真器必须全程在线；调试器连接一旦断开，就不能再读数据。** `disconnect()` 会结束 JTAG 会话；所谓“断开后另起只读”其实是重新连接一个已经复位、跑 Flash 的目标，读到的不是本次 RAM 固件。这条规则没有例外。**仿真器在线 + 单会话**是读取 RAM 运行态数据的唯一前提。
 
-## 操作边界
+## 三种情况
 
-- 不编辑工程/配置，不调用构建脚本，不加 `-Build`、`-Run` 或 `-LoadOnly`，不下载 `.out`，不复位、启动或主动停核。**只读结果异常也不自动切换执行模式。**
-- `-OutFile` 指向**已存在、与当前运行固件匹配**的 `.out`，仅向调试器装载符号，目标程序不被下载。若固件身份/符号不确定，先核对现有构建记录、map/校验值或 CCS 会话；无法确认时停止符号变量的判读，不用“顺手重新编译/下载”解决。
-- 本技能的 `-Run` 会在工程 `Debug/.ti_c2000_loaded.json` 记录已加载 `.out` 的 SHA256；只读调用发现该文件的哈希变化时会在连接前报 `SYMBOL_MISMATCH`。没有记录时会警告，仍须核对板上固件；CCS GUI 或其他工具重新下载不会自动更新这份记录。纯构建默认不覆盖 `Debug` 下的 `.out`。
-- 运行态读取脚本在 `connect()` 前设置 CCS DSS 选项：`HaltOnConnect=false`、`AutoResetOnConnect=false`、`RestartOnSymbolLoad=false`、`UseLegacyStopMode=false`、`AllowInterruptsWhenHalted=true`、`PoliteRealtimeMode=true`。现场 CCS12.8 查询发现 `HaltOnConnect` 默认是 **true**；所以临时脚本即便没有显式 `halt()`，连接时也可能先停核再恢复。固件中的 `ERTM` 清除 C28x 的 DBGM，配合调试器实时选项使用；单靠 `ERTM` 不能代替调试器设置。
-- 目标必须已在运行。若连接后发现已暂停、读数时变成暂停或实时访问失败，脚本报错并不擅自 `runAsynch()`；先核对固件状态和 CCS 连接配置。运行态逐项读取也不构成同一时刻的原子快照，高频变量可跨中断变化。
-- 探针预检存在时，DSS 连接失败最多短间隔重试三次；遇到 `-1133` 会说明目标当时执行不可调试代码。重试仍只尝试实时连接，不停核、不复位、不下载。探针预检缺失会直接停止，需用户接好后再操作。
-- 外设寄存器即使只执行读取，也可能有“读清除”等硬件语义；对状态/中断寄存器先查该器件手册的访问属性。需要观察多变量同一时刻的值时，在固件里准备原子快照或带序号的采样缓冲。
+| 情况 | 是否允许 | 说明 |
+|---|---|---|
+| **同一 DSS 会话内** `load → runAsynch → 读` | **唯一允许** | 连接全程不断开；读发生在 `runAsynch` 之后 |
+| **断开后另起只读** | **禁止** | F28379D 断开会复位跑 Flash（`-1142`）；DSP28335 可能读到 Flash 旧程序（`gRunMs` 不增长、PC 在 Flash） |
+| **CCS GUI 手动实时看** | 允许 | Realtime Mode + 目标可调试 + 会话保持；Expressions/Watch 开 Continuous Refresh |
 
-## 最小命令
+## 两个正式入口
 
-```powershell
-pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_runtime.ps1" `
-  -ProjectPath "<当前 CCS 工程>" -Ccxml "<当前目标配置.ccxml>" `
-  -OutFile "<与板上固件匹配的已有.out>" -CorePattern ".*CPU1.*" `
-  -Variables "<参数表达式>,<ADC结果表达式>,<寄存器表达式>"
-```
+| 用途 | 入口 | 前提 |
+|---|---|---|
+| **低速连续读** | `ti_c2000_run_read.ps1` | 不需要 DMA；默认 0.5 s × 10 轮（名义 5 s，实际含读取开销约 6 s）；时长 = `-Rounds` × `-IntervalMs`，100 s 用 `-Rounds 200 -IntervalMs 500` |
+| **高速 DMA 读** | `ti_c2000_read_dma.ps1 -FrozenBufferReady` | 固件已配 ADC + DMA（+ ping-pong）并置冻结标志/序号 |
 
-单核器件可省略 `-CorePattern`；F28379D 等双核器件明确选 CPU1/CPU2。`-Variables` 必填，可传逗号分隔的变量、字段或固定下标，例如 `ClAdcCtrl.usResult[0],EPwm1Regs.TBPRD`。脚本在连接前拒绝赋值、函数调用、指针运算等不在简单取值语法内的表达式；`-WaitFor` 可用 `gBootStage == 5` 或 `y1 > 5.8 && y2 > 13.2` 这种只比较读数的条件。直接调用旧入口 `ti_c2000_debug.ps1 -ReadOnly -ReadVars "..."` 也走同一限制。具体名称从当前器件头文件、工程和已有 `.out` 确认。
+以下入口已禁用，调用直接返回 `FAILURE: READONLY_UNRELIABLE`（exit 2）：
 
-需要等现有程序到某个状态再取数值时，可加 `-WaitFor "<只读条件>" -RunMs <上限毫秒>`；只读模式在**运行态**反复读条件，不停核、不编译或下载。若目标在连接时已经暂停，报错退出，不自动启动目标。
+- `ti_c2000_read_runtime.ps1`
+- `ti_c2000_read_array_runtime.ps1`
+- `ti_c2000_debug.ps1 -ReadOnly/-ReadVars/-ReadArray`
 
-修改程序后的顺序固定为：先在执行模式执行 `ti_c2000_debug.ps1 -Build -Run`，确认 `RESULT: OK` 与退出码 0；再在本模式读取。旧 `-Build -Run -ReadVars` 会在连接前被拒绝；只传 `-ReadVars` 的旧写法自动转为只读。脚本发现目标已停就报错，不靠 `runAsynch` 恢复。
+## 读取前必须确认是 RAM
 
-大量固定数组值用正式只读数组入口。它在**同一 DSS 会话**中按批检查状态与心跳，避免每批重新 `connect()`。例如已由固件录满并冻结的 16×400 ADC 缓冲，读取全部 400 帧（50 Hz、1 kHz 下的 20 个周期）：
+1. 工程 `.cmd` 是 RAM 链接（如 `2837xD_RAM_lnk_cpu1.cmd`）；
+2. `loadProgram` 把 `.out` 下载到 RAM；
+3. 心跳首值在启动窗口内（`gMsTick`/`gRunMs` ≤ 10000）且跨轮严格递增；
+4. 判据脚本 `ti_c2000_check_read.ps1` 通过（身份 / 活性 / 冻结窗口 / 范围）。
 
-```powershell
-pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_array_runtime.ps1" `
-  -ProjectPath "<工程根目录>" -ArrayName gAdcAllBuf -Rows 16 -Columns 400 `
-  -BatchSize 320 -WaitFor "gAdcBufFull == 1" -HeartbeatExpr gRunMs `
-  -ReadTimeoutSec 900 -MinValue 0 -MaxValue 4095 `
-  -OutputPath "<新的输出.csv>"
-```
+## 判据
 
-`-Columns` 只决定读取每行的前多少帧，不改变 C 数组实际每行 400 元素的步长。等待 `gAdcBufFull` 表示固件已录满并冻结，不限制 JTAG 传输时间。每批核对运行状态和心跳；最终还核对退出码、`RESULT: OK`、表达式顺序、数量及码值范围。失败时只保留 `.partial` 与 `.log` 原始记录，不冒充完整 CSV。若固件没有冻结缓冲，跨批数据仍非原子快照。不能改用裸 `connect → halt → readData → runAsynch`；见[数组读取停核复盘](debug-cases/dsp28335/2026-11-07-read-halt-bulk-array.md)。
+见 [data-read-verdict.md](data-read-verdict.md)。缺任何一级都不算读取成功。
 
-例如 F28335 的 ADC 可分别读 `AdcMirror.ADCRESULT0`（右对齐 12 位）与 `AdcRegs.ADCRESULT0`（左对齐结果），先核对当前工程是否使用该结果槽；其它器件按自身寄存器定义。单个 ADC 码值不能判断正弦幅值、通道接线或电压精度。需要趋势时多次独立采样并记录时间；不能靠一次读数做修改结论。
+## 历史坑（已归档）
 
-## 判读与停止条件
-
-1. 保存命令、目标核、固件标识、原始 `VAR` 输出、退出码和 `RESULT`。`RESULT: OK` 只表示这次读取完成，不表示 ADC/算法/外设功能正确。
-2. 若读到全零、前后矛盾、浮点显示成整数或与物理现象冲突，先核对符号匹配、ADC 左/右对齐、寄存器位/整字、目标核与采样时机；用同一只读模式的另一表达式或 CCS 已有寄存器视图交叉核查。DSP28335 的已知读回陷阱见[调试经验](c28x-pitfalls.md)与[FPU 位型案例](debug-cases/dsp28335/2026-10-28-fpu-dss-float-readback.md)。
-3. 若只读证据仍不足，报告“未确认”及需要的下一种证据。编译、下载、复位、运行新测试固件属于**执行模式**，需用户已有相应任务授权。
-
-TI 依据：[CCS 12.8 实时模式与自动停核选项](https://software-dl.ti.com/ccs/esd/documents/users_guide_12.8.0/ccs_debug-main.html)、[DSS `AllowInterruptsWhenHalted` 选项](https://software-dl.ti.com/ccs/esd/documents/users_guide_12.0.0/sdto_dss_handbook.html)。
+- **2026-11-07 DSP28335**：另起只读返回 `RESULT: OK`，但 `gRunMs=11460` 两次不增长、`PC=0x32F06D` 在 Flash，读到的不是刚下载的 RAM 程序。
+- **2026-11-14 F28379D**：只 `disconnect()` 后 `gMsTick 527→0`、`isHalted=true`；`HaltOnDisconnect` / `ResetOnDisconnect` / `AutoResetOnDisconnect` 均 `Option not found`；另起只读报 `-1138` / `-1142`。
+- **结论**：断开后不读；要读就单会话。详见 [DSS 说明](dss-debug.md) 和 [单会话案例](debug-cases/f28379d/2026-11-14-disconnect-then-read-is-a-bug.md)。

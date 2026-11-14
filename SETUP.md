@@ -20,14 +20,14 @@ pwsh -NoProfile -File .\scripts\ti_c2000_build.ps1 -ProjectPath "<工程根目�
 板上已有程序且只需观察时，直接在运行态读取；不得先下载：
 
 ```powershell
-pwsh -NoProfile -File .\scripts\ti_c2000_read_runtime.ps1 -ProjectPath "<工程根目录>" -Variables "EPwm1Regs.TBPRD"
+pwsh -NoProfile -File .\scripts\ti_c2000_run_read.ps1 -ProjectPath "<工程根目录>" -Variables "EPwm1Regs.TBPRD"
 ```
 
-确需更新程序时，构建下载运行与读取分两次调用：
+单会话内加载、运行、按 0.5 s 连续读 10 轮；**断开后禁止再读**。高速 DMA 数组用：
 
 ```powershell
-pwsh -NoProfile -File .\scripts\ti_c2000_debug.ps1 -ProjectPath "<工程根目录>" -Build -Run
-pwsh -NoProfile -File .\scripts\ti_c2000_read_runtime.ps1 -ProjectPath "<工程根目录>" -Variables "EPwm1Regs.TBPRD"
+pwsh -NoProfile -File .\scripts\ti_c2000_read_dma.ps1 -ProjectPath "<工程根目录>" `
+  -ArrayName gAdcAllBuf -Rows 16 -Columns 200 -FrozenBufferReady
 ```
 
-每步以 `RESULT: OK` **且退出码 0** 为成功。只读调用不编译、下载、复位或主动停核；已停机时会报错。操作规则见 [SKILL.md](SKILL.md)。
+每步以 `RESULT: OK` **且退出码 0** 为成功。旧 `read_runtime`/`read_array` 入口已禁用（`READONLY_UNRELIABLE`），不要重新启用独立只读会话。操作规则见 [SKILL.md](SKILL.md)。

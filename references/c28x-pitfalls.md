@@ -508,3 +508,77 @@ if (usWas == 0) { __enable_interrupts(); }
 - **修法**：自适应用**低通后的频率**（本项目 `s_freq_lp`），并给 ω 加限幅（40~60 Hz）；
   更新周期 20~200 ms 均可，别每拍更新。
 - **判据**：锁相环"锁住了但相位有固定偏差"时，先分三块查——① 采样延迟补偿 ② 环路稳态误差 ③ 自适应/参数更新的输入是否干净。
+
+## 七、ePWM 频率只有一半：EPWMCLK 默认是 SYSCLK/2（2026-11-14，F28379D 实测）
+
+`PERCLKDIVSEL.EPWMCLKDIV` 复位默认值为 **1**，即 `EPWMCLK = PLLSYSCLK / 2`（实测读数 1，200 MHz 器件上是 100 MHz）。
+按 `TBPRD = SYSCLK/Fsw - 1` 算就会得到**一半**的开关频率：
+
+```text
+实测：SYSCLK=200 MHz（IMULT=40, DIV=2 已确认）、TBPRD=9999、TBCLK 分频全 0
+      期望 20 kHz，实际 10 kHz；50 Hz 正弦调制变成 25 Hz（400 点表 / 10 kHz）
+修正：保持 EPWMCLKDIV=1（EPWMCLK=100 MHz），增计数且 TBCLK 分频为 /1 时
+      TBPRD 改为 100 MHz / 20 kHz - 1 = 4999。
+```
+
+排查顺序（本次有效）：① 读 `ClkCfgRegs.SYSPLLMULT.bit.IMULT` / `SYSCLKDIVSEL.bit.PLLSYSCLKDIV` 确认 SYSCLK；
+② 读 `PERCLKDIVSEL.bit.EPWMCLKDIV`；③ 再读 `EPwm1Regs.TBCTL.all`（分频/计数模式）与 `TBPRD`。
+判断"实际开关频率"的可靠办法：在 SOCA/中断里递增一个 `volatile Uint32` 计数器，隔 1 s 读数求差，
+不要靠外设配置反推。
+
+**器件上限**：F28379D 数据手册规定 EPWMCLK 最高 100 MHz；当 SYSCLK 超过 100 MHz，EPWMCLK 必须是 SYSCLK 的一半。SYSCLK=200 MHz 时不能为了恢复 20 kHz 把 `EPWMCLKDIV` 改为 0（/1）。
+
+## 八、ePWM 频率是"两级分频"，不是"设成 200 MHz"
+
+`PLLSYSCLK = 200 MHz` **不等于** ePWM 跑 200 MHz。完整链路：
+
+```text
+XTAL 10 MHz ──PLL(IMULT=40, ÷2)──► PLLSYSCLK/SYSCLK = 200 MHz   (InitSysPll)
+   ├─ ClkCfgRegs.PERCLKDIVSEL.EPWMCLKDIV ──► EPWMCLK     复位默认 = /2 = 100 MHz (!)
+   │        └─ EPwm.TBCTL.HSPCLKDIV × TBCTL.CLKDIV ──► TBCLK
+   │                └─ TBPRD ──► 开关频率 = TBCLK/(TBPRD+1)  (增计数)
+   └─ LOSPCP(÷4) ──► LSPCLK = 50 MHz  (SCI/SPI 波特率按它算)
+```
+
+| 级 | 寄存器 | 取值 | 写错/不写的后果 |
+|---|---|---|---|
+| ① | `PERCLKDIVSEL.EPWMCLKDIV` | 200 MHz SYSCLK 时保持 **1 = ÷2** | F28379D 的 EPWMCLK 不得超过 100 MHz |
+| ② | `TBCTL.HSPCLKDIV` / `TBCTL.CLKDIV` | 0 / 0 = ÷1÷1 | TBCLK = EPWMCLK / (HSPCLKDIV × CLKDIV)；实际分频须读回 |
+| ③ | `TBPRD`（16 位） | 增计数时 `TBCLK/Fsw - 1` | EPWMCLK=100 MHz、两级分频 /1 时，最低约 1.53 kHz；更低频率须按器件手册选择分频 |
+
+本次 200 MHz SYSCLK、20 kHz 增计数、TBCLK 两级分频均为 /1 的计算例：
+
+```c
+ClkCfgRegs.PERCLKDIVSEL.bit.EPWMCLKDIV = 1;   /* /2，EPWMCLK = 100 MHz */
+EPwm1Regs.TBCTL.bit.HSPCLKDIV = TB_DIV1;
+EPwm1Regs.TBCTL.bit.CLKDIV    = TB_DIV1;
+EPwm1Regs.TBPRD = (100000000UL / 20000UL) - 1UL; /* 4999 */
+```
+
+判定"实际开关频率"不要靠配置反推：在 SOCA/中断里递增 `volatile Uint32` 计数器，隔 1 s 读数求差最可靠。
+
+TI 依据：[F28379D 数据手册 ePWM 时钟上限](https://www.ti.com/lit/ds/symlink/tms320f28379d.pdf)、[F2837xD ePWM 分频与计数模式](https://software-dl.ti.com/trainingTTO/trainingTTO_public_sw/c28x28379/F2837xD_Microcontroller_MDW_2-0.pdf)。
+
+## 九、用反汇编核查编译器/库的实际行为（dis2000）
+
+判断题（"这行代码到底编译成了什么"）不要靠印象，直接反汇编：
+
+```powershell
+$bin='C:\ti\ccsv6\tools\compiler\ti-cgt-c2000_15.12.1.LTS\bin'
+& "$bin\dis2000.exe" <工程>.out | Select-String -Pattern '_(函数名):' -Context 0,40
+# 只想看某段：先找标签行号，再打印后面 N 行
+```
+
+本次反汇编记录（2026-11-14，F28379D + CGT 15.12.1；周期成本尚未在板上计时）：
+
+| 写法 | 反汇编结果 | 含义 |
+|---|---|---|
+| 查表 + `float32` 乘加 | `UI16TOF32` / `MPYF32` | 纯 FPU 指令，0 次三角函数 |
+| `sinf(x)`（默认严格浮点模式） | `LCR ___sinf` | **库调用**；具体周期数须按当前工程计时，不凭调用形式判定能否满足 20 kHz 预算 |
+| `__sin(x)`（`--fp_mode=relaxed` + `--tmu_support=tmu0`） | `DIV2PIF32` + `SINPUF32` | TMU 两条指令（输入弧度） |
+| `__sinpuf32(x)`（只要 `--tmu_support=tmu0`） | `SINPUF32` | TMU **单条**指令，输入 per-unit（1.0 = 2π） |
+
+配套坑：工程里选了 TMU 但构建命令没传 `--tmu_support=tmu0` 时，`__sinpuf32` 会退化成
+隐式声明 + 外部调用，链接报 `___sinpuf32 unresolved`（本项目构建脚本已修：读 `.cproject` 的
+`compilerID.TMU_SUPPORT` 并传 `--tmu_support`）。同理 `math.h` 要让 `__sin` 生效需
+`--fp_mode=relaxed`，而 `__sinpuf32` 在严格模式下也可用——优先用后者。

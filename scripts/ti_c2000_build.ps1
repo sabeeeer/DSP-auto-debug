@@ -218,6 +218,7 @@ if ($siliconVer -ne '28') {
 $largeMem = (Get-OptionValue 'compilerID.LARGE_MEMORY_MODEL') -eq 'true'
 $unified  = (Get-OptionValue 'compilerID.UNIFIED_MEMORY')    -eq 'true'
 $fs       = Get-OptionValue 'compilerID.FLOAT_SUPPORT'
+$tmu      = Get-OptionValue 'compilerID.TMU_SUPPORT'
 $stackSz  = Get-OptionValue 'linkerID.STACK_SIZE' '0x300'
 $outFormat = 'COFF'
 $n = $cproj.SelectSingleNode("//listOptionValue[contains(@value,'OUTPUT_FORMAT=')]")
@@ -547,6 +548,10 @@ $cflags = @("-v$siliconVer", '-g', '--display_error_number', '--diag_wrap=off', 
 if ($largeMem) { $cflags += '-ml' }
 if ($unified)  { $cflags += '-mt' }
 $cflags += $floatFlag
+# TMU（三角/除法硬件单元）：.cproject 里选了 tmu0/tmu1 就必须传，否则 __sinpuf32 等
+# 内建函数会退化成外部调用，链接时报 "___sinpuf32 unresolved"。
+if ($tmu -match 'tmu1')      { $cflags += '--tmu_support=tmu1' }
+elseif ($tmu -match 'tmu0')  { $cflags += '--tmu_support=tmu0' }
 if ($optLevel)    { $cflags += $optLevel }
 if ($mfOpt)       { $cflags += $mfOpt }
 if ($fpMode)      { $cflags += $fpMode }

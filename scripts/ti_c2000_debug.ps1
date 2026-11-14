@@ -2,8 +2,9 @@
 # =====================================================================
 # ti_c2000_debug.ps1
 #   Two modes for TI C2000 in CCS: non-stop realtime read of an existing target,
-#   or the execution build/load/run workflow. Observation is always a later
-#   read-only call, including when a new program was just downloaded.
+#   or the execution build/load/run workflow. A later standalone read cannot
+#   establish the identity of a just-loaded RAM image after the loader exits;
+#   use ti_c2000_run_read.ps1 for same-session execution and observation.
 #
 #   - auto-detects the CCS installation (registry / C:\ti / %USERPROFILE%\ti)
 #   - detects the XDS probe and fails fast & clearly when the board is absent
@@ -35,11 +36,19 @@ param(
     [string]$ReadArray   = "",
     [int]$ArrayRows     = 1,
     [int]$ArrayColumns  = 0,
-    [int]$ArrayBatchSize = 320,
-    [string]$HeartbeatExpr = "",
+    # measured 2026-11-14: 320 -> 0.331 ms/word, 2000 -> 0.296 ms/word
+    [int]$ArrayBatchSize = 2000,
+    # Candidate list: the first readable expression becomes the liveness proof.
+    # -NoHeartbeat explicitly disables it (not recommended).
+    [string]$HeartbeatExpr = "gMsTick,gRunMs,usMainLoop",
+    [int]$StartupMaxMs  = 10000,
+    [switch]$NoHeartbeat,
+    # Force per-element evaluate instead of batched memory.readData
+    [switch]$PointMode,
     [int]$ReadTimeoutSec = 300,
     [string]$WaitFor     = "",
-    [string]$CorePattern = ".*",
+    # Match the single C28xx core on F28335 or CPU1 on F28379D; exclude CLA1.
+    [string]$CorePattern = '.*C28xx(?:_CPU1)?$',
     [switch]$NoProbeCheck,
     [switch]$AllowNotReady,
     [int]$TimeoutSec     = 180,
@@ -54,19 +63,16 @@ function Info2($m) { if (-not $Quiet) { Write-Output $m } }
 
 # Reject incompatible arguments before a background process, build or loader
 # can start. Reading is always a separate non-stop realtime operation.
-if (($ReadVars -or $ReadArray) -and -not $ReadOnly) {
-    if ($Build -or $Run -or $LoadOnly) {
-        Out2 "FAILURE: READ_REQUIRES_SEPARATE_READONLY"
-        Out2 "RESULT: FAIL"
-        Out2 "REASON: first build/download/run; then read the running target in a separate read-only call"
-        exit 2
-    }
-    $ReadOnly = $true
+if ($ReadVars -or $ReadArray -or $ReadOnly) {
+    Out2 'FAILURE: READONLY_UNRELIABLE'
+    Out2 'RESULT: FAIL'
+    Out2 'REASON: separate read-only sessions are disabled; use ti_c2000_run_read.ps1 or ti_c2000_read_dma.ps1 in one session'
+    exit 2
 }
-if ($WaitFor -and -not ($ReadVars -or $ReadArray)) {
-    Out2 "FAILURE: WAIT_REQUIRES_READONLY"
-    Out2 "RESULT: FAIL"
-    Out2 "REASON: -WaitFor is a read condition; run the program first, then use -ReadOnly -ReadVars -WaitFor"
+if ($WaitFor) {
+    Out2 'FAILURE: WAIT_REQUIRES_SINGLE_SESSION'
+    Out2 'RESULT: FAIL'
+    Out2 'REASON: -WaitFor belongs to a single-session read; use run_read/read_dma, not the legacy wrapper'
     exit 2
 }
 if ($ProbeCheckOnly -and ($Build -or $AllowCompilerFallback -or $Run -or $LoadOnly -or $ReadOnly -or $ReadVars -or $ReadArray -or $NoProbeCheck)) {
@@ -109,9 +115,11 @@ if ($ReadOnly) {
         Out2 "REASON: -ReadVars and -ReadArray are separate read modes"
         exit 2
     }
+    $heartbeatNames = if ($NoHeartbeat) { @() } else { @($HeartbeatExpr -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+    $unsafeHeartbeat = @($heartbeatNames | Where-Object { $_ -notmatch "^$pathPattern$" })
     if ($unsafeRead.Count -gt 0 -or ($WaitFor -and $WaitFor -notmatch $waitPattern) -or
         ($ReadArray -and $ReadArray -notmatch '^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$') -or
-        ($HeartbeatExpr -and $HeartbeatExpr -notmatch "^$pathPattern$") -or
+        $unsafeHeartbeat.Count -gt 0 -or
         ($ReadArray -and ($ArrayRows -lt 1 -or $ArrayColumns -lt 1 -or $ArrayBatchSize -lt 1 -or
                          ([long]$ArrayRows * [long]$ArrayColumns) -gt 100000)) -or
         $ReadTimeoutSec -lt 1 -or $ReadTimeoutSec -gt 3600) {
@@ -131,6 +139,7 @@ if ($ReadOnly) {
     Out2 "REASON: choose -Build, -Run, -LoadOnly or -ReadOnly -ReadVars; no implicit load-only action"
     exit 2
 }
+if ($NoHeartbeat) { $HeartbeatExpr = '' }
 
 # ---------- 0. detached mode ----------
 # A big application may need minutes before its registers settle; an IDE/agent
@@ -404,6 +413,10 @@ if (@(Get-Process ccstudio, ccstudio64, eclipsec -ErrorAction SilentlyContinue).
 
 # ---------- 5a. DSS path: read-only values or full load/run/read ----------
 if ($ReadVars -or $ReadArray) {
+    Out2 'FAILURE: READONLY_UNRELIABLE'
+    Out2 'RESULT: FAIL'
+    Out2 'REASON: separate read-only sessions cannot prove they read the current RAM firmware; use ti_c2000_run_read.ps1 or ti_c2000_read_dma.ps1 in one session'
+    exit 2
     if (-not (Test-Path $dss)) { Out2 "RESULT: FAIL"; Out2 "REASON: dss.bat not found at $dss"; exit 2 }
     $tpl = Join-Path $PSScriptRoot 'dss_template.js'
     if (-not (Test-Path $tpl)) { Out2 "RESULT: FAIL"; Out2 "REASON: dss_template.js missing"; exit 2 }
@@ -429,6 +442,7 @@ if ($ReadVars -or $ReadArray) {
     $body = $body.Replace('{{ARRAY_COLUMNS}}', [string]$ArrayColumns)
     $body = $body.Replace('{{ARRAY_BATCH_SIZE}}', [string]$ArrayBatchSize)
     $body = $body.Replace('{{HEARTBEAT_EXPR}}', (Escape-JsString $HeartbeatExpr))
+    $body = $body.Replace('{{USE_BATCH}}', $(if ($PointMode) { '0' } else { '1' }))
     $body = $body.Replace('{{READ_TIMEOUT_MS}}', [string]($ReadTimeoutSec * 1000))
     $body = $body.Replace('{{WAIT_EXPR}}', (Escape-JsString $waitExpr))
     $body = $body.Replace('{{SESSION_PATTERN}}', (Escape-JsString $CorePattern))
@@ -492,6 +506,79 @@ if ($ReadVars -or $ReadArray) {
         exit 1
     }
     if ($timedOut.Count -gt 0) { Out2 "WARN    : readiness timed out but -AllowNotReady was given; values below may be stale/zero" }
+
+    # ---------- mandatory verdict: no read may return OK without it ----------
+    $verdictScript = Join-Path $PSScriptRoot 'ti_c2000_check_read.ps1'
+    if (-not (Test-Path -LiteralPath $verdictScript)) {
+        Out2 "FAILURE: ENV_NO_VERDICT_SCRIPT"
+        Out2 "RESULT: FAIL"
+        Out2 "REASON: ti_c2000_check_read.ps1 is missing; reads are not allowed without the verdict"
+        exit 2
+    }
+    $hbBefore = [ordered]@{}
+    $hbAfter = [ordered]@{}
+    foreach ($l in $dout) {
+        if ([string]$l -match '^HB\s+(\S+)\s+(before|after)\s+=\s+(.+)$') {
+            if ($Matches[2] -eq 'before' -and -not $hbBefore.Contains($Matches[1])) { $hbBefore[$Matches[1]] = $Matches[3] }
+            if ($Matches[2] -eq 'after') { $hbAfter[$Matches[1]] = $Matches[3] }
+        }
+    }
+    if ($HeartbeatExpr -and ($hbBefore.Count -eq 0 -or $hbAfter.Count -ne $hbBefore.Count)) {
+        Out2 'FAILURE: NO_LIVENESS_EVIDENCE'
+        Out2 'RESULT: FAIL'
+        Out2 'REASON: DSS did not return a complete before/after heartbeat pair'
+        exit 1
+    }
+    $expectedValues = if ($ReadArray) { [long]$ArrayRows * [long]$ArrayColumns } else { $readNames.Count }
+    $valueRows = @($varLines | ForEach-Object {
+        if ([string]$_ -match '^VAR\s+(.+?)\s+=\s+(.+)$') {
+            [pscustomobject]@{ expression = $Matches[1]; value = $Matches[2] }
+        }
+    })
+    if ($valueRows.Count -ne $expectedValues) {
+        Out2 'FAILURE: INCOMPLETE_VALUES'; Out2 'RESULT: FAIL'
+        Out2 ("REASON: parsed {0}/{1} requested values" -f $valueRows.Count, $expectedValues); exit 1
+    }
+    $numericCsv = Join-Path $env:TEMP ("ti_c2000_values_{0}.csv" -f ([guid]::NewGuid().ToString('N')))
+    $valueRows | Select-Object -Property value | Export-Csv -LiteralPath $numericCsv -NoTypeInformation -Encoding UTF8
+    $pwshExe = Join-Path $PSHOME 'pwsh.exe'
+    if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
+    $numericOut = & $pwshExe -NoProfile -ExecutionPolicy Bypass -File $verdictScript -CsvPath $numericCsv -AllowNoHeartbeat -ExpectedRows $expectedValues -RangeVars value 2>&1
+    $numericCode = $LASTEXITCODE
+    Remove-Item -LiteralPath $numericCsv -Force -ErrorAction SilentlyContinue
+    foreach ($l in $numericOut) { if ([string]$l -notmatch '^RESULT: ') { Out2 ([string]$l) } }
+    if ($numericCode -ne 0 -or -not @($numericOut | Where-Object { $_ -match '^RESULT: OK\s*$' }).Count) {
+        Out2 'FAILURE: VERDICT_FAILED'; Out2 'RESULT: FAIL'
+        Out2 'REASON: a requested data value is missing or not a finite number'; exit 1
+    }
+    $tmpCsv = Join-Path $env:TEMP ("ti_c2000_verdict_{0}.csv" -f (Get-Random))
+    $vf = New-Object System.Text.UTF8Encoding($true)
+    $sw = New-Object System.IO.StreamWriter($tmpCsv, $false, $vf)
+    try {
+        if ($hbBefore.Count -gt 0) {
+            $sw.WriteLine((@($hbBefore.Keys) -join ','))
+            $sw.WriteLine((@($hbBefore.Values) -join ','))
+            $sw.WriteLine((@($hbBefore.Keys | ForEach-Object { $hbAfter[$_] }) -join ','))
+        } else {
+            $sw.WriteLine('status')
+            $sw.WriteLine('1')
+        }
+    } finally { $sw.Dispose() }
+    $vargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $verdictScript,
+               '-CsvPath', $tmpCsv)
+    if ($hbBefore.Count -gt 0) { $vargs += @('-HeartbeatVars', (@($hbBefore.Keys) -join ',')) }
+    else { $vargs += '-AllowNoHeartbeat' }
+    $vout = & $pwshExe @vargs 2>&1
+    $vcode = $LASTEXITCODE
+    foreach ($l in $vout) { if ([string]$l -notmatch '^RESULT: ') { Out2 ([string]$l) } }
+    Remove-Item -LiteralPath $tmpCsv -Force -ErrorAction SilentlyContinue
+    if ($vcode -ne 0) {
+        Out2 "FAILURE: VERDICT_FAILED"
+        Out2 "REASON: read data did not pass the mandatory verdict (references/data-read-verdict.md)"
+        Out2 "RESULT: FAIL"
+        exit 1
+    }
+
     Out2 "RESULT: OK"
     exit 0
 }
