@@ -150,7 +150,13 @@ if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
 
 Info2 "PROJECT : $ProjectPath"
 Info2 ('SERVICE : pid {0}, loaded {1}' -f $svcPid, $state.started)
-Info2 ('LOAD    : #{0} (this session), reads never download' -f $(if ($state.loadIndex) { $state.loadIndex } else { '?' }))
+. (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
+$loadIdx = $state.loadIndex
+if (-not $loadIdx) {
+    $cn = Get-LoadCount -ProjectPath $ProjectPath
+    if ($state.outSha256 -and $state.outSha256 -eq $cn.lastSha256) { $loadIdx = $cn.count }
+}
+Info2 ('LOAD    : #{0} (this session), reads never download' -f $(if ($loadIdx) { $loadIdx } else { '?' }))
 Info2 ('OUT     : {0}' -f $state.out)
 
 # ---------------------------------------------------------------- array ------

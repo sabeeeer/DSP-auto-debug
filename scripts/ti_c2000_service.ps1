@@ -101,9 +101,13 @@ if ($Status) {
     $st = Get-ServiceState
     $cnt = Get-LoadCount -ProjectPath $ProjectPath
     if (Test-ServiceAlive) {
+        # sessions started before the counter existed have no loadIndex; if the
+        # image matches the last counted download we can still name it
+        $idx = $st.loadIndex
+        if (-not $idx -and $st.outSha256 -and $st.outSha256 -eq $cnt.lastSha256) { $idx = $cnt.count }
         Out2 ('SERVICE : RUNNING (pid {0}, since {1})' -f $st.pid, $st.started)
         Out2 ('MODE    : ' + $(if ($st.runMode) { $st.runMode } else { 'SingleStep' }))
-        Out2 ('LOAD    : #' + $(if ($st.loadIndex) { $st.loadIndex } else { '?' }) + ' (this session)')
+        Out2 ('LOAD    : #' + $(if ($idx) { $idx } else { '?' }) + ' (this session)')
         Out2 ('LOADS   : #{0} total for this project, last at {1}' -f $cnt.count, $cnt.lastLoad)
         Out2 ('OUT     : {0}' -f $st.out)
         Out2 ('SHA256  : {0}' -f $st.outSha256)
