@@ -40,7 +40,7 @@
 | F28379D / CPU1 / XDS110 | 单会话读取 / 输出契约 | 重复 `RESULT:` 行、失败保留上次 `result: OK`、`-Build` 双 RESULT、心跳失败无 `REASON`、`NO_FROZEN_FLAG` 误报、旧只读脚本强制参数绕过守卫、时间戳目录与 `Tools/out` 镜像、旧只读入口已彻底删除 | 已回归 | [2026-11-14-readout-contract-brute-test](debug-cases/f28379d/2026-11-14-readout-contract-brute-test.md) |
 | F28379D / CPU1 / XDS100v2 | 执行模式 / 常驻会话 | 每次读都重载程序、`gMsTick` 反复归零、两次读数描述两次不同运行、`STALE_SERVICE`、`NO_FROZEN_FLAG`、Rhino varargs 与 `delete` 关键字、`/s /c` 引号、`$rounds` 撞 `-Rounds` | 已上板验证 | [2026-11-14-live-session-service](debug-cases/f28379d/2026-11-14-live-session-service.md) |
 | F28379D / CPU1 / XDS100v2 | 运行模式 × 读模式 / 互锁 / 下载计数 | 自动编译下载打乱数据、频繁烧录伤机器、单步常驻、连续模式反复下载到数据对、只读模式零下载、`READONLY_IN_ITERATE`、`ITERATE_IN_PROGRESS`、`MUTUALLY_EXCLUSIVE`、`NO_SESSION`、`NOT_RAM_IMAGE`、`LOAD_NOT_CONFIRMED`、`ITERATE_NOT_APPROVED`、`load-count.json`、`LOAD #N` | 已回归（脚本层） | [2026-11-14-run-modes-and-load-counter](debug-cases/f28379d/2026-11-14-run-modes-and-load-counter.md) |
-| F28379D / CPU1 / XDS100v2 | 全功能上机审计 / 心跳 / 互锁 | 连续运行结束后 `READONLY_IN_ITERATE` 永久挡住只读（遗留会话 `runMode=Iterate`）；读不含心跳量的变量必然 `HEARTBEAT_FAIL`（心跳值只存在于 `VARS` 响应）；`-NoHeartbeat` 反而判失败；CSV 判据重复要求心跳列；`member not found` 缺 `.bit.` 提示 | 已修复并回归 | [2026-11-14-on-target-audit](debug-cases/f28379d/2026-11-14-on-target-audit.md) |
+| F28379D / CPU1 / XDS100v2 | 全功能上机审计 / 心跳 / 互锁 | 连续运行结束后 `READONLY_IN_ITERATE` 永久挡住只读（遗留会话 `runMode=Iterate`）；读不含心跳量的变量必然 `HEARTBEAT_FAIL`（心跳值只存在于 `VARS` 响应）；`-NoHeartbeat` 反而判失败；CSV 判据重复要求心跳列；`member not found` 缺 `.bit.` 提示 | 已回归 | [2026-11-14-on-target-audit](debug-cases/f28379d/2026-11-14-on-target-audit.md) |
 
 新案例按[案例模板](debug-cases/CASE-TEMPLATE.md)记录，原始日志/波形优先保存在对应工程或用户指定位置，案例中写稳定路径与关键读数，避免把大量原始数据复制进技能。
 
