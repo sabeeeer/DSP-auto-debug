@@ -51,6 +51,8 @@ description: 处理 TI C2000/DSP 的 CCS 工程：两种运行模式（默认单
 
 **入口职责**：`ti_c2000_service.ps1` 管会话（启动时加载一次 / 停 / 查，并维护下载计数）；`ti_c2000_iterate.ps1` 是连续运行的唯一入口（每轮都是"停会话 + 构建下载 + ReadOnly 读 + 判据"）；`ti_c2000_run_read.ps1`（慢速，标量/状态机）和 `ti_c2000_read_dma.ps1`（DMA 冻结缓冲，数组/波形）默认 **ReadOnly 附着**；`ti_c2000_live_read.ps1` 是会话协议客户端（只读、从不下载）；`ti_c2000_readmode.ps1` 是运行模式 × 读模式的互锁库（标记、RAM 判据、目标锁）；`ti_c2000_loadcount.ps1` 是计数与判据库；`ti_c2000_check_read.ps1` 只拿 CSV 做判读，不连硬件。除这些之外，没有任何别的读数入口。
 
+**脚本只有一个来源**：工程目录里**不得**放本 skill 脚本的副本。副本会抢执行权（实际运行时走副本、不按 skill 的互锁与判据），而且 skill 一更新副本就过期。工程自带的 `Tools/scripts/` 只放**本工程特有**的工具（如串口帧解析、正弦表生成）。发现旧副本（`ti_c2000_*.ps1`、`verify_on_target.ps1`、`dss_load_run_read.js` 之类）直接删除，并把工程入口文档里的调用改成上面的 skill 命令。
+
 **`-Standalone` 逃生口**：两个读入口都保留 `-Standalone`，它只是 `-Mode LoadRead` 的别名（单进程 load → run → read），同样要求 `-ConfirmLoad`，否则 `FAILURE: LOAD_NOT_CONFIRMED`（exit 4）；只用于没有常驻会话的排障，不是常规用法。
 
 旧的独立只读会话入口（`ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1`）以及 `ti_c2000_debug.ps1` 里的 `-ReadOnly/-ReadVars/-ReadArray/-WaitFor` **已从 skill 中删除**，不保留“禁用但还在”的空壳：**仿真器断开后再读，一定不是本次 RAM 固件**（F28379D 复位跑 Flash；DSP28335 可能读到 Flash 旧程序）。**仿真器在线 + 单会话**是读取 RAM 运行态数据的前提。低速连续读适用于所有板；高速 DMA 读需要固件配置 ADC+DMA 并冻结缓冲——28335 与 28379D 都有 DMA，按工程配置决定，不是器件差异。CCS GUI 手动实时看仍可行：Realtime Mode + 目标可调试 + 会话保持，Expressions/Watch 开 Continuous Refresh。
