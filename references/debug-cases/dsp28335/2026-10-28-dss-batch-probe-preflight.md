@@ -24,5 +24,5 @@
 
 - 工程 `4-1Two_Level_CloseLoop`、F28335、XDS100v2、CCS 12.8.1。原始日志在工程 `work/run-20261107-loadrun.log`、`work/run-20261107-loadrun-retry.log`、`work/run-20261107-loadti-direct.log`。探针未插时 `-Run` 返回 `NO_PROBE`；此前构建已经执行，违反“运行前先确认探针”的期望。
 - 探针接入后，`ti_c2000_debug.ps1 -Run` 在 PowerShell 7 直接调用 `loadti.bat` 的第 406 行抛 `StandardOutputEncoding is only supported when standard output is redirected`，批处理未启动，却被误分类为 `LOADTI_TIMEOUT`。相同 `loadti` 参数经 `cmd.exe /d /c` 实际完成 `Done`、`Target running...`、退出码 0，说明问题在脚本调用层。
-- 修订脚本：新增 `-ProbeCheckOnly`；`-Build -Run` 在编译前查探针，缺失即 `NO_PROBE`/退出码 3；`loadti.bat` 经 `ProcessStartInfo` 启动 `cmd.exe` 并分别捕获标准输出和错误，启动异常分类为 `LOADTI_LAUNCH_ERROR`。离线测试 `tests/test_debug_preflight.ps1` 用含空格路径的假 `loadti.bat` 验证 `RESULT: OK`、退出码 0，并验证无探针时未调用假构建器。真实板上尚未用修订后的脚本再次下载。
+- 修订脚本：新增 `-ProbeCheckOnly`；`-Build -Run` 在编译前查探针，缺失即 `NO_PROBE`/退出码 3；`loadti.bat` 经 `ProcessStartInfo` 启动 `cmd.exe` 并分别捕获标准输出和错误，启动异常分类为 `LOADTI_LAUNCH_ERROR`。离线测试 `tests/test_debug_preflight.ps1`（该文件随后续调试脚本重构**已移除**，现行对应覆盖见 `tests/test_run_modes.ps1`）用含空格路径的假 `loadti.bat` 验证 `RESULT: OK`、退出码 0，并验证无探针时未调用假构建器。真实板上尚未用修订后的脚本再次下载。
 - 构建器此前在较新的 CCS 安装中找不到工程声明的 `15.12.1.LTS` 后立即退到 `22.6.1.LTS`，漏查另一处旧版 CCS 安装。修订后先跨所有安装查找精确版本；本工程离线构建实际选中 `ti-cgt-c2000_15.12.1.LTS`，编译链接 `RESULT: OK`、退出码 0。若精确版本不可用，默认 `COMPILER_VERSION_MISSING`，需明确传入 `-AllowCompilerFallback` 才换版本。此次构建没有下载，板上运行固件与新暂存 `.out` 的符号身份不能混用。

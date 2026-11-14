@@ -47,7 +47,9 @@ param(
     [switch]$NoHeartbeat,
     [switch]$Quiet,
     # ReadOnly: attach and read, never download. LoadRead: download once, then read.
-    [ValidateSet('ReadOnly', 'LoadRead')][string]$Mode = 'ReadOnly',
+    # no [ValidateSet]: an illegal value must reach Resolve-ReadModeSpec, otherwise the
+    # documented FAILURE: INVALID_READ_MODE (exit 2) can never be produced
+    [string]$Mode = 'ReadOnly',
     # pass only after the user said yes to "compile/download and run?"
     [switch]$ConfirmLoad,
     # LoadRead only: repeat the download+read cycle until these conditions hold
@@ -171,7 +173,8 @@ if ($spec.mode -eq 'ReadOnly') {
         Out2 'HINT    : -Stop the session and start it again (-Start -ConfirmLoad) to load the new image'
         exit 2
     }
-    if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'ReadOnly')) { exit 5 }
+    $lk = Enter-TargetLock -ProjectPath $ProjectPath -Mode 'ReadOnly'
+    if (-not $lk.ok) { foreach ($l in $lk.message) { Out2 $l }; exit 5 }
     try {
         Info2 ('JUDGE   : session alive (pid {0}, loaded {1}, LOAD #{2})' -f $s.state.pid, $s.state.started, $(if ($s.state.loadIndex) { $s.state.loadIndex } else { '?' }))
         Info2 ('JUDGE   : image matches this build (sha256 {0})' -f $curSha.Substring(0, 16))
@@ -216,7 +219,8 @@ if ($liveNow.alive) {
     $stopOut = & $pwshExe @stopArgs 2>&1
     foreach ($line in $stopOut) { if ([string]$line -match '^FAILURE:') { Out2 ([string]$line) } }
 }
-if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'LoadRead')) { exit 5 }
+$lk = Enter-TargetLock -ProjectPath $ProjectPath -Mode 'LoadRead'
+if (-not $lk.ok) { foreach ($l in $lk.message) { Out2 $l }; exit 5 }
 # everything below owns the target; the finally at the end of the file releases the
 # lock on every exit path, including failures and Ctrl-C
 try {

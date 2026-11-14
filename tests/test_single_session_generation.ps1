@@ -9,9 +9,12 @@ $dssDir = Join-Path $ccs 'ccs_base/scripting/bin'
 New-Item -ItemType Directory -Force -Path $scripts, $project, $dssDir, (Join-Path $project 'Debug'), (Join-Path $project 'targetConfigs') | Out-Null
 
 try {
-    Copy-Item (Join-Path $root 'scripts/ti_c2000_run_read.ps1') $scripts
-    Copy-Item (Join-Path $root 'scripts/ti_c2000_read_dma.ps1') $scripts
-    Copy-Item (Join-Path $root 'scripts/ti_c2000_loadcount.ps1') $scripts
+    # copy the whole scripts folder: listing files by hand means every new helper
+    # (ti_c2000_readmode.ps1 arrived that way) silently breaks the fixture
+    Copy-Item (Join-Path $root 'scripts/*.ps1') $scripts -Force
+    # the readers dot-source the mode library, so ti_c2000_debug.ps1 must be a stub
+    # AFTER the copy or it would overwrite the real one
+    Remove-Item (Join-Path $scripts 'ti_c2000_debug.ps1') -Force -ErrorAction SilentlyContinue
     @'
 param([string]$ProjectPath, [string]$CcsRoot, [switch]$ProbeCheckOnly)
 Write-Output 'RESULT: OK'

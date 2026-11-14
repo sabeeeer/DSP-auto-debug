@@ -56,7 +56,10 @@ param(
     [switch]$ConfirmLoad,
     # SingleStep = load once and stay (default). Iterate = continuous, driven by
     # ti_c2000_iterate.ps1 -UserApproved, which passes -RunMode Iterate every round.
-    [ValidateSet('SingleStep', 'Iterate')][string]$RunMode = 'SingleStep',
+    # no [ValidateSet]: an illegal value must reach Resolve-RunModeSpec, which reports
+    # FAILURE: INVALID_RUN_MODE (exit 2). A binding-time rejection exits 1 with an English
+    # message, and the documented classification would be unreachable.
+    [string]$RunMode = 'SingleStep',
     [switch]$UserApproved,
     [int]$StartTimeoutSec = 90,
     [switch]$Quiet
@@ -169,7 +172,8 @@ if ($Stop) {
         Out2 'RESULT: OK'
         exit 0
     }
-    if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'Stop')) { exit 5 }
+    $lk = Enter-TargetLock -ProjectPath $ProjectPath -Mode 'Stop'
+    if (-not $lk.ok) { foreach ($l in $lk.message) { Out2 $l }; exit 5 }
     $st = Get-ServiceState
     # ask the DSS script to leave its loop and disconnect, so the probe is released
     [IO.File]::WriteAllText($cmdFile, 'STOP', [Text.Encoding]::ASCII)
@@ -290,7 +294,8 @@ if (-not (Test-Path -LiteralPath $dss)) { Out2 'FAILURE: ENV_NO_DSS'; Out2 'RESU
 New-Item -ItemType Directory -Path $svcDir -Force | Out-Null
 # from here on the target is being taken: hold the lock so no read can attach while
 # the image is being written (checked after the cheap build/probe work on purpose)
-if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'Start')) { exit 5 }
+$lk = Enter-TargetLock -ProjectPath $ProjectPath -Mode 'Start'
+if (-not $lk.ok) { foreach ($l in $lk.message) { Out2 $l }; exit 5 }
 foreach ($f in @($readyFile, $stoppedFile, $errorFile, $cmdFile, $resFile, $stateFile)) {
     if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 }

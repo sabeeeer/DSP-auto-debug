@@ -40,6 +40,24 @@ pwsh -NoProfile -File scripts/check_project_entry.ps1 -ProjectPath <CCS 工程�
 
 ②还兼一个硬门禁：**工程内若存在 skill 脚本副本**，写目标的入口（`service -Start`、`iterate`）直接 `PROJECT_NOT_CLEAN`(2) 拒绝——副本才是实际执行者，不能让它决定一次下载；只读入口只给 `WARN` 并继续（读不会损坏目标）。
 
+### 测试套件（改完 skill 必跑，全部无板卡即可运行）
+
+```powershell
+Get-ChildItem tests\test_*.ps1 | Sort-Object Name | ForEach-Object { pwsh -NoProfile -File $_.FullName }
+```
+
+| 测试 | 覆盖什么 | 为什么需要它 |
+|---|---|---|
+| `test_doc_contract` | 490 条"文档承诺"对账：文档里出现的脚本名必须存在、承诺的 `FAILURE:` 码必须真的会被产生、内部链接必须可解析、命令里的参数必须在该脚本 `param()` 里（AST 比对）、每个脚本必须有 `#requires -Version 7.0` | **AI 是按文档执行的**，文档与代码不一致时"严格照做"反而是错的 |
+| `test_param_matrix` | 30 组非法/冲突参数，逐条断言 `FAILURE:` 分类 + 退出码 + **一次调用只有一条 `RESULT:` 行** | AI 靠 `RESULT:` 与退出码下判断，两条或零条都会让它误判 |
+| `test_state_chaos` | 19 个脏状态：死 pid 的锁/标记必须可接管、活 pid 的锁必须挡住、坏 JSON 的状态必须判"无会话"、坏计数不能崩 | 崩溃、断电、上次强杀都会留下这种状态，绝不能被当成"一切正常" |
+| `test_skill_identity` | 身份行、`skill-runs.jsonl` 记录、副本存在时写路径 `PROJECT_NOT_CLEAN` 拒绝/读路径仅警告 | "走了 skill"必须可证 |
+| `test_project_entry` | 工程入口文档齐全、无脚本副本、文档没指向已删脚本 | 换工具后的第一道闸 |
+| `test_e2e_readonly` | 真机 10 例只读场景 + 下载计数不得 +1；**无探针时自动 SKIP** | 夹具测不到的探针/会话/四道证明组合 |
+| 其余（模式、判据、契约、生成器） | 运行模式互锁、读判据、DSS 生成、序列号探针 | 回归防线 |
+
+**判定标准**：15 个测试两轮全绿 + `PARSE_ERRORS=0` + 可迁移性门禁 0 拦截，才算这个 skill 可用。
+
 ### 多平台副本必须同步（这是"换了工具就不按 skill 跑"的常见真因）
 
 有的工具把 skill 放在自己的目录里（如 Codex 的 `%USERPROFILE%\.codex\skills\<name>`），读的是**它自己那份副本**，不会跟着本目录更新。实测 2026-11-14：Codex 那份是几天前的旧版（70 文件 / `SKILL.md` 7479 B，还留着已删除的 `ti_c2000_read_runtime.ps1`），于是"按 skill 跑"实际上跑的是旧规则——**看起来完全正确，比报错更危险**。
@@ -101,7 +119,7 @@ $env:PYTHONUTF8 = '1'
 
 **下载计数（必须汇报）**：每次真正写入目标——`service -Start`（`SingleStep`）、`ti_c2000_iterate.ps1` 的每轮（`Iterate`）、`-Mode LoadRead`、`-Standalone`、`ti_c2000_debug.ps1 -Run/-LoadOnly`——都会把 `<工程>\readout\load-count.json` 的 `count` +1，输出显示 `LOAD    : #7 (this is download number 7 for this project)`；`lastMode` 记录这次是单步、连续还是按需读。`-Stop` 不清零，计数跨会话累计。**读输出里的 `LOAD #N` 就是当前会话那一次下载**：两次读之间 N 若变了，中间又烧录过，数据不可比，必须说明。
 
-**入口职责**：`ti_c2000_service.ps1` 管会话（启动时加载一次 / 停 / 查，并维护下载计数）；`ti_c2000_iterate.ps1` 是连续运行的唯一入口（每轮都是"停会话 + 构建下载 + ReadOnly 读 + 判据"）；`ti_c2000_run_read.ps1`（慢速，标量/状态机）和 `ti_c2000_read_dma.ps1`（DMA 冻结缓冲，数组/波形）默认 **ReadOnly 附着**；`ti_c2000_live_read.ps1` 是会话协议客户端（只读、从不下载）；`ti_c2000_readmode.ps1` 是运行模式 × 读模式的互锁库（标记、RAM 判据、目标锁）；`ti_c2000_loadcount.ps1` 是计数与判据库；`ti_c2000_check_read.ps1` 只拿 CSV 做判读，不连硬件。除这些之外，没有任何别的读数入口。
+**入口职责**：`ti_c2000_build.ps1` 只做编译/链接自检（不需要探针，不下载，认 `RESULT: OK`）；`ti_c2000_service.ps1` 管会话（启动时加载一次 / 停 / 查，并维护下载计数）；`ti_c2000_iterate.ps1` 是连续运行的唯一入口（每轮都是"停会话 + 构建下载 + ReadOnly 读 + 判据"）；`ti_c2000_run_read.ps1`（慢速，标量/状态机）和 `ti_c2000_read_dma.ps1`（DMA 冻结缓冲，数组/波形）默认 **ReadOnly 附着**；`ti_c2000_live_read.ps1` 是会话协议客户端（只读、从不下载）；`ti_c2000_readmode.ps1` 是运行模式 × 读模式的互锁库（标记、RAM 判据、目标锁）；`ti_c2000_loadcount.ps1` 是计数与判据库；`ti_c2000_check_read.ps1` 只拿 CSV 做判读，不连硬件。除这些之外，没有任何别的读数入口。
 
 **脚本只有一个来源**：工程目录里**不得**放本 skill 脚本的副本。副本会抢执行权（实际运行时走副本、不按 skill 的互锁与判据），而且 skill 一更新副本就过期。工程自带的 `Tools/scripts/` 只放**本工程特有**的工具（如串口帧解析、正弦表生成）。发现旧副本（`ti_c2000_*.ps1`、`verify_on_target.ps1`、`dss_load_run_read.js` 之类）直接删除，并把工程入口文档里的调用改成上面的 skill 命令。
 

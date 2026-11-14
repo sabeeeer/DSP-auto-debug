@@ -63,7 +63,15 @@ function Get-TargetLockInfo {
     } catch { return [ordered]@{ pid = 0; mode = '?'; at = '?' } }
 }
 
-<# one target operation at a time; a lock left by a dead process is taken over #>
+<#
+one target operation at a time; a lock left by a dead process is taken over.
+
+Returns an OBJECT, never a bare bool next to diagnostic output: a function that
+Write-Output's four lines and then `return $false` hands the caller a five-element array,
+and `if (-not (Enter-TargetLock ...))` evaluates that as "truthy" - so a busy target would
+have been treated as acquired and two operations would have driven the same probe.
+Measured 2026-11-14 by tests/test_state_chaos.ps1.
+#>
 function Enter-TargetLock {
     param(
         [Parameter(Mandatory)][string]$ProjectPath,
@@ -80,17 +88,21 @@ function Enter-TargetLock {
         if ($info -and $info.pid -gt 0) { $holder = Get-Process -Id $info.pid -ErrorAction SilentlyContinue }
         if (-not $holder) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue; break }
         if ((Get-Date) -ge $deadline) {
-            Write-Output 'FAILURE: TARGET_BUSY'
-            Write-Output 'RESULT: FAIL'
-            Write-Output ("REASON: {0} (pid {1}) holds the target since {2}" -f $info.mode, $info.pid, $info.at)
-            Write-Output 'HINT    : one operation at a time - wait, or check that process'
-            return $false
+            return [ordered]@{
+                ok      = $false
+                message = @(
+                    'FAILURE: TARGET_BUSY'
+                    'RESULT: FAIL'
+                    ("REASON: {0} (pid {1}) holds the target since {2}" -f $info.mode, $info.pid, $info.at)
+                    'HINT    : one operation at a time - wait, or check that process'
+                )
+            }
         }
         Start-Sleep -Milliseconds 200
     }
     $text = '{0}|{1}|{2}' -f $PID, $Mode, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     try { [IO.File]::WriteAllText($path, $text, [Text.Encoding]::ASCII) } catch { }
-    return $true
+    return [ordered]@{ ok = $true; message = @() }
 }
 
 function Exit-TargetLock {
