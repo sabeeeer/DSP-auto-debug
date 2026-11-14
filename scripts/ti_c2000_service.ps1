@@ -141,7 +141,13 @@ if ($Status) {
         if (-not $idx -and $st.outSha256 -and $st.outSha256 -eq $cnt.lastSha256) { $idx = $cnt.count }
         Out2 ('SERVICE : RUNNING (pid {0}, since {1})' -f $st.pid, $st.started)
         $rm = if ($st.runMode) { [string]$st.runMode } else { 'SingleStep' }
-        Out2 ('RUN MODE: {0}' -f $(if ($rm -eq 'Iterate') { 'Iterate (continuous - a loop owns the target)' } else { 'SingleStep (load once, run forever; reads attach)' }))
+        # runMode=Iterate in the state file only means "a loop put this image here"; whether
+        # a loop is running NOW is the marker's job (see Get-RunModeInfo)
+        $miLive = Get-RunModeInfo -ProjectPath $ProjectPath
+        $rmText = if ($miLive.active) { 'Iterate (continuous - a loop owns the target)' }
+                  elseif ($rm -eq 'Iterate') { 'SingleStep (image left by a finished continuous run; reads attach)' }
+                  else { 'SingleStep (load once, run forever; reads attach)' }
+        Out2 ('RUN MODE: {0}' -f $rmText)
         Out2 ('LOAD    : #' + $(if ($idx) { $idx } else { '?' }) + ' (this session)')
         Out2 ('LOADS   : #{0} total for this project, last at {1}' -f $cnt.count, $cnt.lastLoad)
         Out2 ('OUT     : {0}' -f $st.out)

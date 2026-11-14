@@ -134,8 +134,33 @@ function Request([string]$Text) {
     }
     if ($r.errors.Count -gt 0) {
         Out2 'FAILURE: VALUE_READ_FAILED'; Out2 'RESULT: FAIL'
-        Out2 ('REASON: ' + ($r.errors -join '; ')); exit 1
+        Out2 ('REASON: ' + ($r.errors -join '; '))
+        $all = ($r.errors -join ' ')
+        # "member 'X' not found" on C2837x almost always means the bitfield was skipped:
+        # ADCPWDNZ lives in ADCCTL1.bit, not in ADCCTL1. Saying so saves a round trip.
+        if ($all -match "member '([^']+)' not found") {
+            Out2 ('HINT    : on C2837x a control bit sits in a bitfield - write Reg.BITFIELD.bit.NAME, e.g. AdcaRegs.ADCCTL1.bit.' + $Matches[1])
+        } elseif ($all -match 'identifier not found') {
+            Out2 'HINT    : identifier not found - check the exact spelling against the .map of THIS build; a renamed, static or optimised-out symbol looks the same'
+        }
+        exit 1
     }
+    return $r
+}
+
+<#
+Request-Soft -- same exchange, but "identifier not found" is an acceptable answer.
+It exists for the liveness candidates only: a build that does not define gRunMs is
+normal (documented), and asking for it must not fail the user's read. A hard failure
+(timeout, no END, halted target) still returns $null, which the caller reports as an
+unverifiable heartbeat rather than a read error.
+#>
+function Request-Soft([string]$Text) {
+    $raw = Send-Request $Text $RequestTimeoutMs
+    if ($null -eq $raw) { return $null }
+    $r = ConvertFrom-Response $raw
+    if (-not $r.end) { return $null }
+    if ($r.halted) { return $null }
     return $r
 }
 
@@ -250,14 +275,41 @@ if ($ArrayName) {
 }
 
 # ------------------------------------------------------------- variables -----
+# The heartbeat is read in its own tolerant requests, never merged into the user's
+# request. Two reasons, both measured 2026-11-14:
+#   * a read whose -Variables contains no heartbeat (for example "read EPwm1Regs.TBPRD")
+#     used to report every candidate as MISSING and fail with HEARTBEAT_FAIL although
+#     the target was alive - the values only ever existed in the VARS response;
+#   * merging them into one request makes an undefined candidate (gRunMs on this build)
+#     return an error for the WHOLE batch, which turned a legitimate register read into
+#     VALUE_READ_FAILED.
+# So: one strict request for the user's names, then one tolerant request per candidate.
+# Which candidates exist is decided on round 1 and reused afterwards.
+$hbUsable = @()
 # NOT $rounds: PowerShell variable names are case-insensitive, so that would
 # collide with the -Rounds parameter and fail as an array-to-Int32 conversion.
 $samples = @()
 for ($r = 1; $r -le $Rounds; $r++) {
     $resp = Request ('VARS ' + ($names -join '|'))
+    $hbVals = @{}
+    if ($heartbeats.Count -gt 0) {
+        $pool = if ($r -eq 1) { $heartbeats } else { $hbUsable }
+        foreach ($hb in $pool) {
+            $hr = Request-Soft ('VARS ' + $hb)
+            if (-not $hr) { continue }
+            if ($hr.errors.Count -gt 0) { continue }
+            $v = $hr.vars[$hb]
+            if ($null -eq $v -or $v -eq '') { continue }
+            if ($r -eq 1 -and $hbUsable -notcontains $hb) { $hbUsable += $hb }
+            $hbVals[$hb] = $v
+        }
+    }
+    $merged = @{}
+    foreach ($k in $resp.vars.Keys) { $merged[$k] = $resp.vars[$k] }
+    foreach ($k in $hbVals.Keys) { $merged[$k] = $hbVals[$k] }
     $now = Get-Date
     $uptime = ($now - (Get-Process -Id $svcPid).StartTime).TotalMilliseconds
-    $samples += [ordered]@{ round = $r; hostMs = [int64]$uptime; hostTime = $now.ToString('HH:mm:ss.fff'); vars = $resp.vars }
+    $samples += [ordered]@{ round = $r; hostMs = [int64]$uptime; hostTime = $now.ToString('HH:mm:ss.fff'); vars = $merged }
     if ($r -lt $Rounds) { Start-Sleep -Milliseconds $IntervalMs }
 }
 
@@ -312,7 +364,10 @@ elseif ($heartbeats.Count -gt 0) { Out2 'HEARTBEAT: FAIL' }
 
 $vargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $verdictScript,
     '-CsvPath', $csvPath, '-RangeVars', ($names -join ','))
-if ($hbChecked.Count -gt 0) { $vargs += @('-HeartbeatVars', ($hbChecked -join ',')) } else { $vargs += '-AllowNoHeartbeat' }
+# The heartbeat was already judged above from live samples, which is stronger than
+# re-reading a CSV column (and the column only exists when the user listed the counter
+# in -Variables). So the CSV verdict checks numbers and ranges, not liveness.
+$vargs += '-AllowNoHeartbeat'
 if ($ValueMin -ne [int]::MinValue) { $vargs += @('-ValueMin', [string]$ValueMin) }
 if ($ValueMax -ne [int]::MaxValue) { $vargs += @('-ValueMax', [string]$ValueMax) }
 $vout = & $pwshExe @vargs 2>&1
@@ -334,9 +389,12 @@ Out2 ('DATA    : {0}' -f $csvPath)
 Out2 ('VERDICT : {0}' -f (Join-Path $checkDir 'verdict.txt'))
 Out2 ('VALUES  : {0}' -f ($Rounds * $names.Count))
 
-if (-not $hbOk) {
+# -NoHeartbeat means "do not judge liveness", not "liveness failed": with no candidates
+# $hbOk stays false, and the check below must not fire (measured 2026-11-14).
+if ($heartbeats.Count -gt 0 -and -not $hbOk) {
     Out2 'FAILURE: HEARTBEAT_FAIL'; Out2 'RESULT: FAIL'
     Out2 ('REASON: heartbeat did not advance in the live session (not increasing: ' + ($hbFailed -join ', ') + ')')
+    Out2 'HINT    : pass -HeartbeatExpr <var> with a counter that changes every millisecond, or -NoHeartbeat to skip the liveness judgement'
     exit 1
 }
 if ($vcode -ne 0) {

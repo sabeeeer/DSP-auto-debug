@@ -68,6 +68,10 @@ try {
 
     $null = Run 'read a heartbeat' ($common + @('-File', (Join-Path $sc 'ti_c2000_run_read.ps1'), '-ProjectPath', $ProjectPath, '-Variables', 'gMsTick', '-Mode', 'ReadOnly', '-Rounds', '2', '-IntervalMs', '300')) 0 'RESULT: OK'
     $null = Run 'read a register too' ($common + @('-File', (Join-Path $sc 'ti_c2000_run_read.ps1'), '-ProjectPath', $ProjectPath, '-Variables', 'gMsTick,EPwm1Regs.TBPRD', '-Mode', 'ReadOnly', '-Rounds', '3', '-IntervalMs', '200')) 0 'RESULT: OK'
+    # the heartbeat must be read on its own: a read whose -Variables has no counter used
+    # to fail with HEARTBEAT_FAIL on a perfectly alive target (fixed 2026-11-14)
+    $null = Run 'registers only, no heartbeat var' ($common + @('-File', (Join-Path $sc 'ti_c2000_run_read.ps1'), '-ProjectPath', $ProjectPath, '-Variables', 'EPwm1Regs.TBPRD,EPwm1Regs.CMPA.bit.CMPA', '-Mode', 'ReadOnly', '-Rounds', '3', '-IntervalMs', '200')) 0 'HEARTBEAT: OK'
+    $null = Run '-NoHeartbeat skips liveness' ($common + @('-File', (Join-Path $sc 'ti_c2000_run_read.ps1'), '-ProjectPath', $ProjectPath, '-Variables', 'EPwm1Regs.TBPRD', '-Mode', 'ReadOnly', '-Rounds', '2', '-IntervalMs', '200', '-NoHeartbeat')) 0 'RESULT: OK'
     # nothing readable means liveness cannot be proven: a failure is the correct answer
     $null = Run 'all variables missing -> fail' ($common + @('-File', (Join-Path $sc 'ti_c2000_run_read.ps1'), '-ProjectPath', $ProjectPath, '-Variables', 'gNoSuchVar', '-Mode', 'ReadOnly', '-Rounds', '2', '-IntervalMs', '100')) 1 'FAILURE:'
     $null = Run 'illegal mode -> INVALID_READ_MODE' ($common + @('-File', (Join-Path $sc 'ti_c2000_run_read.ps1'), '-ProjectPath', $ProjectPath, '-Variables', 'gMsTick', '-Mode', 'Foo')) 2 'FAILURE: INVALID_READ_MODE'

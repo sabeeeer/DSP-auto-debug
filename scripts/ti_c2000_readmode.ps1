@@ -202,8 +202,13 @@ function Get-RunModeInfo {
     if ($s.alive) {
         $r.source = 'live session'
         $r.pid = [int]$s.state.pid
+        # A session left behind by a FINISHED continuous run still says runMode=Iterate
+        # in its state file. That is history, not an owner: only the marker proves a
+        # loop is running right now. Counting the leftover as active locked every later
+        # read out with READONLY_IN_ITERATE - measured 2026-11-14 after one -MaxLoads 2
+        # run, and the project could not be read again until -Stop.
         if ($s.state.runMode -eq 'Iterate') {
-            $r.mode = 'Iterate'; $r.active = $true
+            $r.mode = 'Iterate'
             if ($s.state.loadIndex) { $r.round = [int]$s.state.loadIndex }
         }
     }

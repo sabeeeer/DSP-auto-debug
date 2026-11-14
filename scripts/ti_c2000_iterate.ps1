@@ -227,6 +227,19 @@ try {
 } finally {
     Remove-Item Env:TI_C2000_ITERATE_CHILD -ErrorAction SilentlyContinue
     Clear-IterateMarker -ProjectPath $ProjectPath
+    # The session this loop leaves behind is no longer "a continuous run in progress":
+    # it is the ordinary attach target for later reads. Relabel it so `service -Status`
+    # and any log reader say the truth ("SingleStep"), instead of showing Iterate for a
+    # loop that has already finished.
+    $left = Get-LiveSessionInfo -ProjectPath $ProjectPath
+    if ($left.alive -and $left.state.runMode -eq 'Iterate') {
+        try {
+            $stateFile = Join-Path $ProjectPath 'readout\.service\state.json'
+            $obj = Get-Content -LiteralPath $stateFile -Raw -Encoding utf8 | ConvertFrom-Json
+            $obj.runMode = 'SingleStep'
+            [IO.File]::WriteAllText($stateFile, ($obj | ConvertTo-Json), (New-Object Text.UTF8Encoding($true)))
+        } catch { }
+    }
 }
 
 $endCount = [int](Get-LoadCount -ProjectPath $ProjectPath).count

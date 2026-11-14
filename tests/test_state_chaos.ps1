@@ -112,7 +112,16 @@ try {
     Check 'session: SingleStep session is not a continuous run' (-not $mi.active) ('mode=' + $mi.mode)
     Write-Text (Join-Path $p 'readout\.service\state.json') ('{"pid":' + $PID + ',"started":"2026-11-14 10:00:00","outSha256":"x","runMode":"Iterate","loadIndex":3}')
     $mi = Get-RunModeInfo -ProjectPath $p
-    Check 'session: Iterate session counts as a continuous run' $mi.active ('mode=' + $mi.mode + ' active=' + $mi.active)
+    # a FINISHED loop leaves runMode=Iterate in the session it leaves behind. That must
+    # not count as "a continuous run is in progress", or every later read is refused with
+    # READONLY_IN_ITERATE until someone stops the session (measured 2026-11-14).
+    Check 'session: leftover Iterate session must not block reads' (-not $mi.active) ('mode=' + $mi.mode + ' active=' + $mi.active + ' src=' + $mi.source)
+    Check 'session: leftover Iterate session still reports its mode' ($mi.mode -eq 'Iterate') ('mode=' + $mi.mode)
+    # only the marker means "running right now"
+    Write-Text (Join-Path $p 'readout\iterate\active.json') ('{"mode":"Iterate","pid":' + $PID + ',"round":2,"maxLoads":5}')
+    $mi = Get-RunModeInfo -ProjectPath $p
+    Check 'session: live marker does block reads' $mi.active ('mode=' + $mi.mode + ' active=' + $mi.active)
+    Remove-Item (Join-Path $p 'readout\iterate\active.json') -Force
 
     # ---------- 4. load counter survives corruption -------------------------
     $p = New-Proj 'count-garbage'
