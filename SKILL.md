@@ -9,6 +9,27 @@ description: 处理 TI C2000/DSP 的 CCS 工程：两种运行模式（默认单
 
 **所有 C2000 板的 DSS 操作前提**：本用户的调试阶段用 RAM 链接与 RAM 变量/缓冲；先核对 `.cmd`/`.map`，不能把 Flash 中的旧程序当作新 RAM 固件。验证新下载程序时，按“一次连接、按需构建与加载一次、运行、在同一会话边运行边读完计划数据”执行。不要把断开会话后的目标运行状态或另起会话读到的数值，自动算作这份新 RAM 固件的证据；断开前必须完成心跳、身份及所需数据检查。**单会话读取不额外编译/下载，但不等于 DSS 建连/断连绝对无扰动；断开后禁止再读。**读数阶段和读数结束不调用 `halt()`；执行模式仅可在加载前按需停核。不同器件/探针的断开行为须实测，不能宣称 DSS 对每颗 DSP 都必然复位；见[DSS 会话边界](references/dss-debug.md#所有器件的操作前提会话边界)。
 
+## 这个 skill 怎么被调用（与 AI 工具无关）
+
+**本 skill 不是 CodeBuddy 专属插件**：它是「一份 Markdown + 一组 PowerShell 脚本」，不需要任何专有运行时。任何 AI 只要能读文件、能执行 `pwsh`，就能完整使用它——互锁、四道证明、下载计数全在脚本内部，**不依赖 AI 是否守规矩**。
+
+| 工具 | 它自动读的入口 | 拿不到这个文件时的后果 |
+|---|---|---|
+| CodeBuddy | 项目根 `CODEBUDDY.md`（或本 skill 的 `SKILL.md`） | 会按习惯自创流程，绕过互锁 |
+| **Codex** | **`AGENTS.md`**（仓库/工作目录根） | **完全不知道这个 skill 存在** |
+| Claude Code | `CLAUDE.md` | 同上 |
+| Cursor / Copilot | `.cursor/rules/*.mdc` / `.github/copilot-instructions.md` | 同上 |
+
+**所以换工具前必须先确认工程根有 `AGENTS.md`**（Codex 只认这一个文件名），并且它显式写出 skill 的绝对路径与"先读 `SKILL.md` 再动手"。`AGENTS.md` / `CODEBUDDY.md` / `CLAUDE.md` 三份内容必须完全一致，改一处要同步另外两处。
+
+自检（只读文件，不碰目标）：
+
+```powershell
+pwsh -NoProfile -File scripts/check_project_entry.ps1 -ProjectPath <CCS 工程目录>
+```
+
+它查四件事，任一不满足即 `RESULT: FAIL`（exit 1）并逐条给 `VIOLATION:`：① 工程内没有 skill 脚本副本；② 工程目录或其上层（≤3 层）有入口文档；③ 每份入口文档都提到 `ti-c2000-ccs-auto`；④ 没有哪一行仍在让人去跑已删除的副本。**`RESULT: OK` 才是"这个工程会按 skill 运行"**。
+
 ## 两种运行模式 × 两种读模式（互锁）
 
 **下载是唯一会重启程序、也是唯一在磨损目标的操作，因此被单独管起来。**默认永远是单步；连续模式必须用户点名。
