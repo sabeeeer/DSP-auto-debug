@@ -1,6 +1,6 @@
 ---
 name: ti-c2000-ccs-auto
-description: 处理 TI C2000/DSP 的 CCS 工程：两种运行模式（默认单步——只加载一次、下载前必问用户；可选连续——反复编译下载直到数据对），加载后附着读取低速变量或高速 DMA 冻结缓冲，并统计下载次数；共用器件与 CCS、TI 算法库、调试经验三类入口。适用于读取当前板参数/ADC/寄存器，或编写、构建和上板验证 DSP28335、F28379D 等工程。
+description: 处理 TI C2000/DSP 的 CCS 工程：两种运行模式（默认单步——只加载一次、常驻、下载前必问用户；用户点名"连续运行"才用连续模式——反复编译下载直到数据对）× 两种读模式（默认只读、零下载、按判据确认跑的是 RAM 镜像；或本次下载一次再读），模式间有互锁，并统计下载次数；共用器件与 CCS、TI 算法库、调试经验三类入口。适用于读取当前板参数/ADC/寄存器，或编写、构建和上板验证 DSP28335、F28379D 等工程。
 ---
 
 # TI C2000 / CCS 工程
@@ -9,7 +9,7 @@ description: 处理 TI C2000/DSP 的 CCS 工程：两种运行模式（默认单
 
 **所有 C2000 板的 DSS 操作前提**：本用户的调试阶段用 RAM 链接与 RAM 变量/缓冲；先核对 `.cmd`/`.map`，不能把 Flash 中的旧程序当作新 RAM 固件。验证新下载程序时，按“一次连接、按需构建与加载一次、运行、在同一会话边运行边读完计划数据”执行。不要把断开会话后的目标运行状态或另起会话读到的数值，自动算作这份新 RAM 固件的证据；断开前必须完成心跳、身份及所需数据检查。**单会话读取不额外编译/下载，但不等于 DSS 建连/断连绝对无扰动；断开后禁止再读。**读数阶段和读数结束不调用 `halt()`；执行模式仅可在加载前按需停核。不同器件/探针的断开行为须实测，不能宣称 DSS 对每颗 DSP 都必然复位；见[DSS 会话边界](references/dss-debug.md#所有器件的操作前提会话边界)。
 
-## 两种运行模式 + 两种读法
+## 两种运行模式 × 两种读模式（互锁）
 
 **下载是唯一会重启程序、也是唯一在磨损目标的操作，因此被单独管起来。**默认永远是单步；连续模式必须用户点名。
 
@@ -18,18 +18,40 @@ description: 处理 TI C2000/DSP 的 CCS 工程：两种运行模式（默认单
 | **单步运行（默认）** | 日常调试、读数据，以及任何"只想看当前程序"的场合。 | `scripts/ti_c2000_service.ps1 -Start [-Build]` 只加载**一次**并常驻运行，之后所有读都附着。**任何下载都必须先得到用户同意**：调用方只有在用户回答"要编译下载"之后才可加 `-ConfirmLoad`；没加就返回 `FAILURE: LOAD_NOT_CONFIRMED`（exit 4），**不编译、不下载、不重启程序**。 |
 | **连续运行（显式开启）** | 只在用户明确说"反复编译下载直到数据对/实验现象成功"时使用。 | `scripts/ti_c2000_iterate.ps1 -UserApproved -Expect 'gBufSeq>=3','gErr==0'`：每轮「停会话 → 构建下载 → 会话内读 → 判据」，不满足再来一轮，最多 `-MaxLoads`（默认 5，上限 20）。没有 `-UserApproved` 直接 `FAILURE: ITERATE_NOT_APPROVED`（exit 4）。 |
 
-| 读法 | 何时使用 | 入口 |
+**运行模式和读模式是两个独立维度**：运行模式决定"程序多久上一次板"，读模式决定"这次读要不要重新下载"。两者交叉时由互锁表裁决，见下。
+
+| 读模式 | 何时使用 | 入口 |
 |---|---|---|
-| **低速连续读** | 慢变量、状态机、计数器、故障标志。 | `scripts/ti_c2000_run_read.ps1`：**附着**常驻会话连续读 N 轮（默认 10 × 0.5 s），不重载、不复位、不停核。百秒级用 `-Rounds 200 -IntervalMs 500`。 |
-| **高速 DMA 读** | µs 级波形、高速采集。 | `scripts/ti_c2000_read_dma.ps1 -FrozenBufferReady`：附着**同一个**会话，等冻结 → 批量 `readData` 搬**一个冻结窗口**（单缓冲、ping-pong 双缓冲都行，只要固件置冻结标志/序号）。 |
+| **`-Mode ReadOnly`（默认）** | 日常读。会话已在跑，只想看当前程序。 | `scripts/ti_c2000_run_read.ps1 -Variables gMsTick,gState`（慢变量）/ `scripts/ti_c2000_read_dma.ps1 -FrozenBufferReady -ArrayName gBuf -Rows 256 -Columns 1`（DMA 冻结窗口）。**绝不下载**：读之前要过四道证明「① 仿真器被 Windows 枚举在线 ② 会话活着 ③ `sha256(out)` 与本次构建一致 ④ 入口符号 `main`/`_c_int00` 地址 < 0x080000 即 RAM（裸符号名，`&main` 在 C28x 上无法求值）」，任一条不成立就拒绝——`NO_PROBE`(3) / `NO_SESSION` / `STALE_SERVICE` / `NOT_RAM_IMAGE` / `RAM_UNVERIFIED`，不会偷偷烧一次把数据凑出来。**"证明不了在 RAM"= 拒绝，不是放行**；确实要读未验证目标时才用 `-AllowUnverified`（日志里会写明）；`-NoProbeCheck` 可跳过 1 秒的探针枚举。 |
+| **`-Mode LoadRead`（显式）** | 本次读必须从新固件开始（改了代码、要确认新镜像），只下载一次。 | 同一命令加 `-Mode LoadRead -ConfirmLoad`：停常驻会话 → **下载一次** → 读 → 退出。`-MaxLoads N -Expect 'gBufSeq>=3'` 可反复下载到判据满足（等价于连续运行的单次版）。 |
+
+**慢速读只有"轮询"精度，选它之前先对时标**：单轮周期 S ≈ `-IntervalMs` + 50~120 ms（默认 0.5 s → S≈0.55~0.62 s，采样上限约 8~20 Hz）。判据三条：① 被测量变化周期 ≥ 10×S（看趋势 ≥ 3×S）；② 不需要等间隔/精确时刻（测不了频率、相位、占空比）；③ 两次采样之间没有有意义的瞬变。**例：数据 100 ms 一更新（10 Hz），慢速读 1.8 Hz 欠采样 5.5 倍——数值本身是真的，但漏掉 5~6 次更新，画出来是混叠假波形，要看每一点必须用 DMA 冻结缓冲。** 算例、实测方法与自测命令见 [慢速读的时限与适用条件](references/single-session-read.md#慢速读的时限与适用条件轮询不是采样示波器)。
+
+**互锁（调用前就判，一条 `FAILURE:` + 一个退出码，不会崩、不会乱跑）**：
+
+| 组合 | 结果 |
+|---|---|
+| `ReadOnly` + `-ConfirmLoad` / `-Build` / `-Expect` / `-MaxLoads>1` | `MUTUALLY_EXCLUSIVE` exit 2 |
+| `LoadRead` + `-AllowUnverified` / `-NoProbeCheck`（只属于 ReadOnly） | `MUTUALLY_EXCLUSIVE` exit 2 |
+| `ReadOnly` 但探针没被枚举（拔线/驱动没起来） | `NO_PROBE` exit 3 |
+| `ReadOnly` 但入口符号 `main`/`_c_int00` 读不到（无法证明 RAM） | `RAM_UNVERIFIED` exit 4 |
+| `LoadRead` 无 `-ConfirmLoad`（含 `-Standalone`） | `LOAD_NOT_CONFIRMED` exit 4 |
+| 连续运行无 `-UserApproved` | `ITERATE_NOT_APPROVED` exit 4 |
+| 连续运行期间外部 `ReadOnly` | `READONLY_IN_ITERATE` exit 4（每轮都重下载，附着读到的运行已经不存在） |
+| 连续运行期间外部 `LoadRead` | `MUTUALLY_EXCLUSIVE` exit 2（同一时刻只允许一个下载者） |
+| 连续运行期间外部 `service -Start/-Stop`、第二个 `iterate` | `ITERATE_IN_PROGRESS` exit 4 |
+| 另一进程正持有目标 | `TARGET_BUSY` exit 5 |
+| `service -Status` | 任何模式下都可查（纯报告） |
 
 **为什么必须常驻**：每次读数都 `connect → load → run` 等于每次都重启程序，两次读到的就不是同一段运行。常驻会话把加载放在启动时，之后所有读都是"附着读取"；反复刷新程序才是"数据肯定不对"的根因。
 
-**下载计数（必须汇报）**：每次真正写入目标——`service -Start`、`-Standalone`、`ti_c2000_debug.ps1 -Run/-LoadOnly`——都会把 `<工程>\readout\load-count.json` 的 `count` +1，输出显示 `LOAD    : #7 (this is download number 7 for this project)`。`-Stop` 不清零，计数跨会话累计。**读输出里的 `LOAD #N` 就是当前会话那一次下载**：两次读之间 N 若变了，中间又烧录过，数据不可比，必须说明。
+**只读不是"下载后读"的替代，而是它的后半段**："下载后读"在实现上就是 `service -Start`（下载一次）+ 反复 `ReadOnly`（零下载）。只读真正不可替代的场合：① 连续运行每轮读必须零下载，否则测的不是同一段运行；② 保留现场——跑飞/进 fault 时一读就重下载等于抹掉证据；③ 程序固化在 Flash 运行时不消耗擦写寿命；④ 同一镜像反复对照时每次约 1 s（含探针枚举），而重下载要约 10~30 s 并重启程序（累积计数器被清零）。它唯一的短板是"板上不一定是我刚编的这版"，这正好由第 ③ 道证明（sha256）兜住：对不上就 `STALE_SERVICE` 拒绝，而不是拿旧数据冒充新数据。**只改代码、验收一次就走的场景用 `-Mode LoadRead` 最短**，不需要常驻会话。
 
-**入口职责**：`ti_c2000_service.ps1` 管会话（启动时加载一次 / 停 / 查，并维护下载计数）；`ti_c2000_run_read.ps1`（慢速，标量/状态机）和 `ti_c2000_read_dma.ps1`（DMA 冻结缓冲，数组/波形）默认**附着常驻会话**，会话不在时**必须带 `-ConfirmLoad` 才允许自启一次**；`ti_c2000_live_read.ps1` 是会话协议客户端（只读、从不下载）；`ti_c2000_loadcount.ps1` 是计数与判据库；`ti_c2000_check_read.ps1` 只拿 CSV 做判读，不连硬件。除这些之外，没有任何别的读数入口。
+**下载计数（必须汇报）**：每次真正写入目标——`service -Start`（`SingleStep`）、`ti_c2000_iterate.ps1` 的每轮（`Iterate`）、`-Mode LoadRead`、`-Standalone`、`ti_c2000_debug.ps1 -Run/-LoadOnly`——都会把 `<工程>\readout\load-count.json` 的 `count` +1，输出显示 `LOAD    : #7 (this is download number 7 for this project)`；`lastMode` 记录这次是单步、连续还是按需读。`-Stop` 不清零，计数跨会话累计。**读输出里的 `LOAD #N` 就是当前会话那一次下载**：两次读之间 N 若变了，中间又烧录过，数据不可比，必须说明。
 
-**`-Standalone` 逃生口**：两个读入口都保留 `-Standalone`，在单进程里 load → run → read，会重载程序，因此同样要求 `-ConfirmLoad`，否则 `FAILURE: RELOAD_BLOCKED`（exit 4）；只用于没有常驻会话的排障，不是常规用法。常驻会话在跑时传 `-Build` 会被忽略并提示，重启会话才会重新编译。
+**入口职责**：`ti_c2000_service.ps1` 管会话（启动时加载一次 / 停 / 查，并维护下载计数）；`ti_c2000_iterate.ps1` 是连续运行的唯一入口（每轮都是"停会话 + 构建下载 + ReadOnly 读 + 判据"）；`ti_c2000_run_read.ps1`（慢速，标量/状态机）和 `ti_c2000_read_dma.ps1`（DMA 冻结缓冲，数组/波形）默认 **ReadOnly 附着**；`ti_c2000_live_read.ps1` 是会话协议客户端（只读、从不下载）；`ti_c2000_readmode.ps1` 是运行模式 × 读模式的互锁库（标记、RAM 判据、目标锁）；`ti_c2000_loadcount.ps1` 是计数与判据库；`ti_c2000_check_read.ps1` 只拿 CSV 做判读，不连硬件。除这些之外，没有任何别的读数入口。
+
+**`-Standalone` 逃生口**：两个读入口都保留 `-Standalone`，它只是 `-Mode LoadRead` 的别名（单进程 load → run → read），同样要求 `-ConfirmLoad`，否则 `FAILURE: LOAD_NOT_CONFIRMED`（exit 4）；只用于没有常驻会话的排障，不是常规用法。
 
 旧的独立只读会话入口（`ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1`）以及 `ti_c2000_debug.ps1` 里的 `-ReadOnly/-ReadVars/-ReadArray/-WaitFor` **已从 skill 中删除**，不保留“禁用但还在”的空壳：**仿真器断开后再读，一定不是本次 RAM 固件**（F28379D 复位跑 Flash；DSP28335 可能读到 Flash 旧程序）。**仿真器在线 + 单会话**是读取 RAM 运行态数据的前提。低速连续读适用于所有板；高速 DMA 读需要固件配置 ADC+DMA 并冻结缓冲——28335 与 28379D 都有 DMA，按工程配置决定，不是器件差异。CCS GUI 手动实时看仍可行：Realtime Mode + 目标可调试 + 会话保持，Expressions/Watch 开 Continuous Refresh。
 

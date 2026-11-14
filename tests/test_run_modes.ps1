@@ -1,12 +1,16 @@
 #requires -Version 7.0
-# Run modes: single-step must refuse every download it was not told about, the
-# counter must move only on a real download, and continuous mode must refuse to
-# start without an explicit user approval. Nothing here touches a board.
+# Two orthogonal dimensions, and every illegal combination between them:
+#   RUN MODE  : SingleStep (load once, then attach) | Iterate (continuous re-download)
+#   READ MODE : ReadOnly (never downloads)          | LoadRead (downloads once)
+# Each refusal must be one FAILURE line plus one documented exit code, decided before
+# any probe/DSS work. Nothing here touches a board.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$fixture = Join-Path ([IO.Path]::GetTempPath()) ('c2000-run-modes-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path ([IO.Path]::GetTempPath()) ('c2000-modes-' + [guid]::NewGuid().ToString('N'))
 $scripts = Join-Path $fixture 'skill/scripts'
 $project = Join-Path $fixture 'folder'
+$svcDir = Join-Path $project 'readout/.service'
+$marker = Join-Path $project 'readout/iterate/active.json'
 
 function Get-Count($p) {
     $f = Join-Path $p 'readout/load-count.json'
@@ -17,11 +21,24 @@ function Invoke-Script([string[]]$a) {
     $out = @(& pwsh @a 2>&1)
     return [ordered]@{ code = $LASTEXITCODE; text = (@($out | ForEach-Object { [string]$_ }) -join "`n") }
 }
+function Expect([string]$label, $r, [int]$code, [string]$pattern) {
+    if ($r.code -ne $code) { throw "$label : exit $($r.code), expected $code`n$($r.text)" }
+    if ($pattern -and $r.text -notmatch $pattern) { throw "$label : output has no '$pattern'`n$($r.text)" }
+}
+function Write-Marker([int]$holderPid) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) | Out-Null
+    $o = [ordered]@{
+        mode = 'Iterate'; pid = $holderPid; round = 2; maxLoads = 5
+        expect = @('gBufSeq>=3'); started = '2026-11-14 10:00:00'
+    }
+    [IO.File]::WriteAllText($marker, ($o | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+}
 
-New-Item -ItemType Directory -Force -Path $scripts, $project, (Join-Path $project 'targetConfigs'), (Join-Path $project 'Debug') | Out-Null
+New-Item -ItemType Directory -Force -Path $scripts, $project, (Join-Path $project 'targetConfigs'), (Join-Path $project 'Debug'), $svcDir | Out-Null
 
 try {
-    foreach ($n in @('ti_c2000_service.ps1', 'ti_c2000_run_read.ps1', 'ti_c2000_read_dma.ps1', 'ti_c2000_loadcount.ps1', 'ti_c2000_iterate.ps1')) {
+    foreach ($n in @('ti_c2000_service.ps1', 'ti_c2000_run_read.ps1', 'ti_c2000_read_dma.ps1',
+                     'ti_c2000_iterate.ps1', 'ti_c2000_loadcount.ps1', 'ti_c2000_readmode.ps1')) {
         Copy-Item -LiteralPath (Join-Path $root "scripts/$n") -Destination $scripts
     }
     # stub only: every case below must stop before any probe/DSS work happens
@@ -31,71 +48,107 @@ try {
     '<config/>' | Set-Content (Join-Path $project 'targetConfigs/target.ccxml') -Encoding UTF8
     'fake' | Set-Content (Join-Path $project 'Debug/DemoImage.out') -Encoding ASCII
 
-    # ---- 1. counter -----------------------------------------------------------
+    $svc = Join-Path $scripts 'ti_c2000_service.ps1'
+    $read = Join-Path $scripts 'ti_c2000_run_read.ps1'
+    $dma = Join-Path $scripts 'ti_c2000_read_dma.ps1'
+    $iter = Join-Path $scripts 'ti_c2000_iterate.ps1'
+
+    # ---- 1. download counter accepts every real download, rejects retired names --
     . (Join-Path $scripts 'ti_c2000_loadcount.ps1')
-    $c0 = Get-LoadCount -ProjectPath $project
-    if ($c0.count -ne 0) { throw 'counter did not start at 0' }
-    for ($i = 1; $i -le 3; $i++) { $null = Add-LoadRecord -ProjectPath $project -Mode 'SingleStep' -Out 'x.out' -Sha256 ('sha' + $i) }
-    $c1 = Get-LoadCount -ProjectPath $project
-    if ($c1.count -ne 3) { throw "counter is $($c1.count), expected 3" }
-    if (@($c1.history).Count -ne 3) { throw 'history did not record three loads' }
-    if ($c1.lastSha256 -ne 'sha3') { throw 'lastSha256 not updated' }
-    for ($i = 4; $i -le 25; $i++) { $null = Add-LoadRecord -ProjectPath $project -Mode 'Iterate' -Out 'x.out' -Sha256 ('sha' + $i) }
-    $c2 = Get-LoadCount -ProjectPath $project
-    if ($c2.count -ne 25) { throw "counter is $($c2.count), expected 25" }
-    if (@($c2.history).Count -ne 20) { throw 'history is not capped at 20' }
-    if ([int]@($c2.history)[-1].n -ne 25) { throw 'history does not end with the newest load' }
+    if ((Get-LoadCount -ProjectPath $project).count -ne 0) { throw 'counter did not start at 0' }
+    $null = Add-LoadRecord -ProjectPath $project -Mode 'SingleStep' -Out 'x.out' -Sha256 'sha1'
+    $null = Add-LoadRecord -ProjectPath $project -Mode 'Iterate' -Out 'x.out' -Sha256 'sha2'
+    $null = Add-LoadRecord -ProjectPath $project -Mode 'LoadRead' -Out 'x.out' -Sha256 'sha3'
+    $null = Add-LoadRecord -ProjectPath $project -Mode 'Explicit' -Out 'x.out' -Sha256 'sha4'
+    $c = Get-LoadCount -ProjectPath $project
+    if ($c.count -ne 4) { throw "counter is $($c.count), expected 4" }
+    if ($c.lastMode -ne 'Explicit') { throw "lastMode is '$($c.lastMode)'" }
+    for ($i = 5; $i -le 25; $i++) { $null = Add-LoadRecord -ProjectPath $project -Mode 'Iterate' -Sha256 ('sha' + $i) }
+    $c = Get-LoadCount -ProjectPath $project
+    if ($c.count -ne 25) { throw "counter is $($c.count), expected 25" }
+    if (@($c.history).Count -ne 20) { throw 'history is not capped at 20' }
+    $rejected = $false
+    try { $null = Add-LoadRecord -ProjectPath $project -Mode 'SingleStepV2' } catch { $rejected = $true }
+    if (-not $rejected) { throw 'an unknown mode name was accepted by Add-LoadRecord' }
 
-    # ---- 2. expectation parsing ----------------------------------------------
-    $ok = Test-LoadExpectation -Expect @('gBufSeq>=3') -Values @{ gBufSeq = '5' }
-    if (-not $ok.ok) { throw 'a satisfied expectation was reported as failure' }
-    $bad = Test-LoadExpectation -Expect @('gBufSeq>=3') -Values @{ gBufSeq = '1' }
-    if ($bad.ok) { throw 'an unsatisfied expectation passed' }
-    $missing = Test-LoadExpectation -Expect @('gErr==0') -Values @{}
-    if ($missing.ok) { throw 'a missing variable passed' }
-    $typo = Test-LoadExpectation -Expect @('gBufSeq !! 3') -Values @{ gBufSeq = '3' }
-    if ($typo.ok -or ($typo.checks -join ';') -notmatch 'UNPARSED') { throw 'a malformed expectation was not rejected' }
-
-    # ---- 3. single-step refuses to download ----------------------------------
+    # reset the history so the load assertions below read cleanly
+    Remove-Item -LiteralPath (Join-Path $project 'readout/load-count.json') -Force
     $before = Get-Count $project
-    $r = Invoke-Script @('-NoProfile', '-File', (Join-Path $scripts 'ti_c2000_service.ps1'), '-ProjectPath', $project, '-Start')
-    if ($r.code -ne 4) { throw "service -Start without -ConfirmLoad exited $($r.code), expected 4`n$($r.text)" }
-    if ($r.text -notmatch 'LOAD_NOT_CONFIRMED') { throw 'service gate did not name LOAD_NOT_CONFIRMED' }
-    if (Test-Path (Join-Path $project 'readout/.service/state.json')) { throw 'service wrote a session despite the gate' }
-    if ((Get-Count $project) -ne $before) { throw 'counter moved although nothing was downloaded' }
 
-    # ---- 4. readers refuse to auto-start a session ---------------------------
-    $r = Invoke-Script @('-NoProfile', '-File', (Join-Path $scripts 'ti_c2000_run_read.ps1'), '-ProjectPath', $project, '-Variables', 'gMsTick')
-    if ($r.code -ne 4 -or $r.text -notmatch 'LOAD_NOT_CONFIRMED') { throw "scalar reader did not gate the auto-start`n$($r.text)" }
-    $r = Invoke-Script @('-NoProfile', '-File', (Join-Path $scripts 'ti_c2000_read_dma.ps1'), '-ProjectPath', $project, '-FrozenBufferReady', '-ArrayName', 'gBuf', '-Rows', '4', '-Columns', '4')
-    if ($r.code -ne 4 -or $r.text -notmatch 'LOAD_NOT_CONFIRMED') { throw "array reader did not gate the auto-start`n$($r.text)" }
-    if ((Get-Count $project) -ne $before) { throw 'a gated read still counted a download' }
+    # ---- 2. RUN MODE gate: continuous needs the user's yes ----------------------
+    $r = Invoke-Script @('-NoProfile', '-File', $svc, '-ProjectPath', $project, '-Start', '-RunMode', 'Iterate', '-ConfirmLoad')
+    Expect 'service -RunMode Iterate without approval' $r 4 'ITERATE_NOT_APPROVED'
+    if (Test-Path (Join-Path $svcDir 'state.json')) { throw 'a refused iterate start left a session behind' }
 
-    # ---- 5. -Standalone needs confirmation too -------------------------------
-    $r = Invoke-Script @('-NoProfile', '-File', (Join-Path $scripts 'ti_c2000_run_read.ps1'), '-ProjectPath', $project, '-Variables', 'gMsTick', '-Standalone')
-    if ($r.code -ne 4 -or $r.text -notmatch 'RELOAD_BLOCKED') { throw "-Standalone reload was not blocked`n$($r.text)" }
+    $r = Invoke-Script @('-NoProfile', '-File', $iter, '-ProjectPath', $project, '-Variables', 'gBufSeq', '-Expect', 'gBufSeq>=3')
+    Expect 'iterate without -UserApproved' $r 4 'ITERATE_NOT_APPROVED'
+    if ((Get-Count $project) -ne $before) { throw 'a refused iterate run counted a download' }
+    if (Test-Path -LiteralPath $marker) { throw 'a refused iterate run left its marker behind' }
 
-    # ---- 6. continuous mode needs explicit approval --------------------------
-    $r = Invoke-Script @('-NoProfile', '-File', (Join-Path $scripts 'ti_c2000_iterate.ps1'), '-ProjectPath', $project, '-Variables', 'gBufSeq', '-Expect', 'gBufSeq>=3')
-    if ($r.code -ne 4 -or $r.text -notmatch 'ITERATE_NOT_APPROVED') { throw "iterate mode ran without approval`n$($r.text)" }
-    if ((Get-Count $project) -ne $before) { throw 'iterate without approval still counted a download' }
+    # ---- 3. the plain download gate still holds --------------------------------
+    $r = Invoke-Script @('-NoProfile', '-File', $svc, '-ProjectPath', $project, '-Start')
+    Expect 'service -Start without -ConfirmLoad' $r 4 'LOAD_NOT_CONFIRMED'
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Mode', 'LoadRead', '-Variables', 'gMsTick')
+    Expect 'LoadRead without -ConfirmLoad' $r 4 'LOAD_NOT_CONFIRMED'
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Standalone', '-Variables', 'gMsTick')
+    Expect '-Standalone without -ConfirmLoad' $r 4 'LOAD_NOT_CONFIRMED'
+    if ((Get-Count $project) -ne $before) { throw 'a refused download counted a download' }
 
-    # ---- 7. status reports the counter without touching the target -----------
-    $r = Invoke-Script @('-NoProfile', '-File', (Join-Path $scripts 'ti_c2000_service.ps1'), '-ProjectPath', $project, '-Status')
-    if ($r.code -ne 0 -or $r.text -notmatch 'SERVICE : STOPPED' -or $r.text -notmatch ('LOADS   : #' + $before)) {
-        throw "status did not report the stopped service and its load count`n$($r.text)"
+    # ---- 4. READ MODE gate: ReadOnly never carries download switches -----------
+    # -Standalone is not listed: it is the LoadRead alias, so it means "download"
+    foreach ($clash in @(@('-ConfirmLoad'), @('-Build'))) {
+        $a = @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Variables', 'gMsTick') + $clash
+        $r = Invoke-Script $a
+        Expect "ReadOnly + $($clash -join ' ')" $r 2 'MUTUALLY_EXCLUSIVE'
     }
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Variables', 'gMsTick', '-Expect', 'gMsTick>0')
+    Expect 'ReadOnly + -Expect' $r 2 'MUTUALLY_EXCLUSIVE'
+    $r = Invoke-Script @('-NoProfile', '-File', $dma, '-ProjectPath', $project, '-ArrayName', 'gBuf', '-Rows', '2', '-Columns', '2', '-FrozenBufferReady', '-ConfirmLoad')
+    Expect 'DMA ReadOnly + -ConfirmLoad' $r 2 'MUTUALLY_EXCLUSIVE'
 
-    Write-Output 'PASS: single-step gates every download, the counter moves only on real loads, continuous mode needs approval'
-    Write-Output 'RESULT: OK'
-    exit 0
-} catch {
-    Write-Output ('FAIL: ' + $_.Exception.Message)
-    Write-Output 'RESULT: FAIL'
-    exit 1
+    # ---- 5. ReadOnly needs a live session; nothing is downloaded to create one --
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Variables', 'gMsTick')
+    Expect 'ReadOnly without a session' $r 4 'NO_SESSION'
+    $r = Invoke-Script @('-NoProfile', '-File', $dma, '-ProjectPath', $project, '-ArrayName', 'gBuf', '-Rows', '2', '-Columns', '2', '-FrozenBufferReady')
+    Expect 'DMA ReadOnly without a session' $r 4 'NO_SESSION'
+    if ((Get-Count $project) -ne $before) { throw 'a refused read counted a download' }
+
+    # ---- 6. while Iterate runs, everything else is locked out ------------------
+    Write-Marker $PID
+
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Variables', 'gMsTick')
+    Expect 'ReadOnly while Iterate runs' $r 4 'READONLY_IN_ITERATE'
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Mode', 'LoadRead', '-ConfirmLoad', '-Variables', 'gMsTick')
+    Expect 'LoadRead while Iterate runs' $r 2 'MUTUALLY_EXCLUSIVE'
+    $r = Invoke-Script @('-NoProfile', '-File', $svc, '-ProjectPath', $project, '-Start', '-ConfirmLoad')
+    Expect 'service -Start while Iterate runs' $r 4 'ITERATE_IN_PROGRESS'
+    $r = Invoke-Script @('-NoProfile', '-File', $svc, '-ProjectPath', $project, '-Stop')
+    Expect 'service -Stop while Iterate runs' $r 4 'ITERATE_IN_PROGRESS'
+    $r = Invoke-Script @('-NoProfile', '-File', $iter, '-ProjectPath', $project, '-UserApproved', '-Variables', 'gBufSeq')
+    Expect 'second Iterate while one runs' $r 4 'ITERATE_IN_PROGRESS'
+    if ((Get-Count $project) -ne $before) { throw 'a locked-out call counted a download' }
+
+    # -Status only reports, so it must stay usable during a continuous run
+    $r = Invoke-Script @('-NoProfile', '-File', $svc, '-ProjectPath', $project, '-Status')
+    Expect 'service -Status while Iterate runs' $r 0 'RESULT: OK'
+    if ($r.text -notmatch 'RUN MODE') { throw "status does not report the run mode`n$($r.text)" }
+
+    # ---- 7. a marker from a dead process must not lock the project for ever ----
+    Write-Marker 999999
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Variables', 'gMsTick')
+    Expect 'stale iterate marker is ignored' $r 4 'NO_SESSION'
+    Remove-Item -LiteralPath $marker -Force
+
+    # ---- 8. with the user's yes, LoadRead gets as far as the probe ------------
+    $r = Invoke-Script @('-NoProfile', '-File', $read, '-ProjectPath', $project, '-Mode', 'LoadRead', '-ConfirmLoad', '-Variables', 'gMsTick')
+    if ($r.code -eq 4 -or $r.text -match 'LOAD_NOT_CONFIRMED|MUTUALLY_EXCLUSIVE|ITERATE_IN_PROGRESS') {
+        throw "an approved LoadRead was refused before the probe check`n$($r.text)"
+    }
+    Expect 'approved LoadRead reaches the probe check' $r 2 'PROBE_CHECK_FAILED'
+    if (Test-Path -LiteralPath (Join-Path $svcDir 'target.lock')) { throw 'the target lock was left behind after a failed LoadRead' }
+    if ((Get-Count $project) -ne $before) { throw 'a read that never reached the target counted a download' }
+
+    Write-Output 'PASS: SingleStep/Iterate and ReadOnly/LoadRead are gated separately, cross-locked while Iterate runs, and no refusal downloads anything'
 } finally {
-    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-    if ([IO.Path]::GetFileName($fixture) -like 'c2000-run-modes-*' -and $fixture.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
-        Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
 }

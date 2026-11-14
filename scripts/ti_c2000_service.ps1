@@ -1,6 +1,6 @@
 #requires -Version 7.0
 <#
-ti_c2000_service.ps1 -- the ONE execution mode: load once, run forever, read many.
+ti_c2000_service.ps1 -- the ONE place that loads. RUN MODE decides how often.
 
 Why this exists: every read needs the JTAG session that loaded the RAM image. A
 script that connects -> loads -> reads -> disconnects re-flashes the target on
@@ -13,14 +13,20 @@ session: no reload, no reset, no re-download.
   read  : write cmd.txt, read res.txt (see ti_c2000_live_read.ps1)
   stop  : write STOP; the DSS script disconnects and exits
 
-RUN MODES (-RunMode), because a load restarts the program and wears the target:
+RUN MODE (two, see ti_c2000_readmode.ps1):
+  SingleStep (default) - load once, run forever, read many. A load restarts the
+      program and wears the target, so it happens only after a human said yes:
+      -Start needs -ConfirmLoad (ask "是否编译下载并运行" first). A second -Start
+      while it runs is a no-op: it reports ALREADY_RUNNING and downloads nothing.
+  Iterate - continuous; driven by ti_c2000_iterate.ps1 -UserApproved, which stops
+      this session, starts it again with -Build -RunMode Iterate, reads, checks
+      -Expect and repeats. Inside an iterate loop this script is off limits to
+      everyone else (ITERATE_IN_PROGRESS).
 
-  SingleStep (default) : never downloads on its own. -Start requires -ConfirmLoad,
-                         which the caller may only pass after the user said yes to
-                         "是否编译下载并运行". Reads never download at all.
-  Iterate              : continuous mode, opt-in. tools that drive it may rebuild
-                         and reload repeatedly until the data looks right. Never
-                         chosen implicitly.
+Reads are not part of this script. ti_c2000_run_read.ps1 / ti_c2000_read_dma.ps1
+attach to the live session (ReadOnly, no download) or download once themselves
+(LoadRead, see ti_c2000_readmode.ps1). The target lock keeps a download and a read
+from overlapping.
 
 Every successful load increments <project>\readout\load-count.json, so the output
 says "LOAD #N" and a runaway reload loop is visible immediately.
@@ -33,7 +39,7 @@ State lives in <project>\readout\.service\:
   server.log   DSS stdout/stderr
 
 Exit code: 0 OK | 1 runtime failure | 2 environment/argument problem
-           3 no probe | 4 load not confirmed by the user (SingleStep guard)
+           3 no probe | 4 load not confirmed by the user | 5 target held elsewhere
 #>
 [CmdletBinding()]
 param(
@@ -46,10 +52,12 @@ param(
     [string]$CcsRoot = '',
     [string]$CorePattern = '.*C28xx(?:_CPU1)?$',
     [switch]$Build,
-    # SingleStep: a load must be confirmed by a human. Iterate: explicit continuous mode.
-    [ValidateSet('SingleStep', 'Iterate')][string]$RunMode = 'SingleStep',
     # set this only after the user answered yes to "compile/download and run?"
     [switch]$ConfirmLoad,
+    # SingleStep = load once and stay (default). Iterate = continuous, driven by
+    # ti_c2000_iterate.ps1 -UserApproved, which passes -RunMode Iterate every round.
+    [ValidateSet('SingleStep', 'Iterate')][string]$RunMode = 'SingleStep',
+    [switch]$UserApproved,
     [int]$StartTimeoutSec = 90,
     [switch]$Quiet
 )
@@ -57,7 +65,7 @@ param(
 $ErrorActionPreference = 'Continue'
 function Out2($m) { Write-Output $m }
 function Info2($m) { if (-not $Quiet) { Write-Output $m } }
-. (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
+. (Join-Path $PSScriptRoot 'ti_c2000_readmode.ps1')
 
 $modes = @($Start, $Stop, $Status) | Where-Object { $_ }
 if ($modes.Count -ne 1) {
@@ -69,6 +77,16 @@ if (-not (Test-Path (Join-Path $ProjectPath '.cproject'))) {
     Out2 'FAILURE: NO_PROJECT'; Out2 'RESULT: FAIL'; Out2 "REASON: no .cproject under '$ProjectPath'"; exit 2
 }
 $ProjectPath = (Get-Item -LiteralPath $ProjectPath).FullName
+
+# ---- run mode ----------------------------------------------------------------
+# SingleStep (default) or Iterate (continuous, only via ti_c2000_iterate.ps1).
+# -Status is pure reporting and stays available; Start/Stop must not fight a
+# running iterate loop over the same target.
+$runSpec = Resolve-RunModeSpec -RunMode $RunMode -ConfirmLoad:$ConfirmLoad -UserApproved:$UserApproved -MaxLoads 1
+if (-not $Status) {
+    $opName = if ($Start) { 'service -Start' } else { 'service -Stop' }
+    Assert-RunModeInterlock -ProjectPath $ProjectPath -What $opName
+}
 
 $svcDir = Join-Path $ProjectPath 'readout\.service'
 $stateFile = Join-Path $svcDir 'state.json'
@@ -106,7 +124,8 @@ if ($Status) {
         $idx = $st.loadIndex
         if (-not $idx -and $st.outSha256 -and $st.outSha256 -eq $cnt.lastSha256) { $idx = $cnt.count }
         Out2 ('SERVICE : RUNNING (pid {0}, since {1})' -f $st.pid, $st.started)
-        Out2 ('MODE    : ' + $(if ($st.runMode) { $st.runMode } else { 'SingleStep' }))
+        $rm = if ($st.runMode) { [string]$st.runMode } else { 'SingleStep' }
+        Out2 ('RUN MODE: {0}' -f $(if ($rm -eq 'Iterate') { 'Iterate (continuous - a loop owns the target)' } else { 'SingleStep (load once, run forever; reads attach)' }))
         Out2 ('LOAD    : #' + $(if ($idx) { $idx } else { '?' }) + ' (this session)')
         Out2 ('LOADS   : #{0} total for this project, last at {1}' -f $cnt.count, $cnt.lastLoad)
         Out2 ('OUT     : {0}' -f $st.out)
@@ -115,7 +134,14 @@ if ($Status) {
         Out2 'RESULT: OK'
         exit 0
     }
+    $mi = Get-RunModeInfo -ProjectPath $ProjectPath
     Out2 'SERVICE : STOPPED'
+    if ($mi.active) {
+        Out2 ('RUN MODE: Iterate (continuous run in progress, pid {0}, round {1}/{2})' -f $mi.pid, $mi.round, $mi.maxLoads)
+    } else {
+        $lastRm = if ($cnt.lastMode -eq 'Iterate') { 'Iterate (last download was a continuous round)' } else { 'SingleStep' }
+        Out2 ('RUN MODE: {0} - no session right now' -f $lastRm)
+    }
     Out2 ('LOADS   : #{0} total for this project, last at {1}' -f $cnt.count, $cnt.lastLoad)
     if (Test-Path -LiteralPath $logFile) { Out2 ('LAST LOG: {0}' -f $logFile) }
     Out2 'RESULT: OK'
@@ -130,6 +156,7 @@ if ($Stop) {
         Out2 'RESULT: OK'
         exit 0
     }
+    if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'Stop')) { exit 5 }
     $st = Get-ServiceState
     # ask the DSS script to leave its loop and disconnect, so the probe is released
     [IO.File]::WriteAllText($cmdFile, 'STOP', [Text.Encoding]::ASCII)
@@ -149,6 +176,7 @@ if ($Stop) {
         if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
     }
     $cnt = Get-LoadCount -ProjectPath $ProjectPath
+    Exit-TargetLock -ProjectPath $ProjectPath
     Out2 'SERVICE : STOPPED'
     Out2 ('LOADS   : #{0} kept (the next -Start would be load #{1})' -f $cnt.count, ([int]$cnt.count + 1))
     Out2 'RESULT: OK'
@@ -167,21 +195,19 @@ if (Test-ServiceAlive) {
     exit 0
 }
 
-# ---- single-step guard -------------------------------------------------------
-# A load rewrites the whole image, restarts the program and wears the target. In
-# SingleStep mode nothing may do that without a human saying yes first. Reads are
+# ---- download guard ----------------------------------------------------------
+# A load rewrites the whole image, restarts the program and wears the target. The
+# only execution mode never does that without a human saying yes first. Reads are
 # never affected: they attach to the session and never come through here.
-if ($RunMode -eq 'SingleStep' -and -not $ConfirmLoad) {
+if (-not $ConfirmLoad) {
     $cnt = Get-LoadCount -ProjectPath $ProjectPath
     Out2 'FAILURE: LOAD_NOT_CONFIRMED'
     Out2 'RESULT: FAIL'
-    Out2 'REASON: single-step mode does not compile or download on its own; no image was written and no program was restarted'
+    Out2 'REASON: nothing was written to the target - this start would compile/download and restart the program'
     Out2 ('HINT    : ask the user "是否编译下载并运行？" first, then re-run the same command with -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
-    Out2 'HINT    : reading does not need this - ti_c2000_run_read.ps1 / ti_c2000_read_dma.ps1 attach to a running session'
+    if ($runSpec.continuous) { Out2 'HINT    : continuous mode also needs -UserApproved; ti_c2000_iterate.ps1 passes both for you' }
+    Out2 'HINT    : reading does not need this - ti_c2000_run_read.ps1 / ti_c2000_read_dma.ps1 attach to a running session (-Mode ReadOnly)'
     exit 4
-}
-if ($RunMode -eq 'Iterate') {
-    Info2 'MODE    : Iterate - continuous mode, this start reloads without asking again'
 }
 
 $projName = Split-Path -Leaf $ProjectPath
@@ -249,6 +275,9 @@ $dss = Join-Path $ccsPath 'ccs_base\scripting\bin\dss.bat'
 if (-not (Test-Path -LiteralPath $dss)) { Out2 'FAILURE: ENV_NO_DSS'; Out2 'RESULT: FAIL'; Out2 "REASON: dss.bat not found under '$ccsPath'"; exit 2 }
 
 New-Item -ItemType Directory -Path $svcDir -Force | Out-Null
+# from here on the target is being taken: hold the lock so no read can attach while
+# the image is being written (checked after the cheap build/probe work on purpose)
+if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'Start')) { exit 5 }
 foreach ($f in @($readyFile, $stoppedFile, $errorFile, $cmdFile, $resFile, $stateFile)) {
     if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 }
@@ -421,6 +450,7 @@ if (-not (Test-Path -LiteralPath $readyFile)) {
     if (Test-Path -LiteralPath $logFile) { $tail = @(Get-Content -LiteralPath $logFile -Tail 12 -ErrorAction SilentlyContinue) }
     if (-not $failReason) { $failReason = 'no ready signal within the startup timeout' }
     & cmd.exe /d /c "taskkill /PID $cmdPid /T /F" 2>&1 | Out-Null
+    Exit-TargetLock -ProjectPath $ProjectPath
     foreach ($line in $tail) { Out2 ([string]$line) }
     Out2 'FAILURE: SERVICE_START_FAILED'; Out2 'RESULT: FAIL'; Out2 ('REASON: ' + $failReason); exit 1
 }
@@ -433,19 +463,25 @@ $state = [ordered]@{
     outSha256 = $outSha
     ccxml     = (Get-Item -LiteralPath $Ccxml).FullName
     core      = $CorePattern
-    runMode   = $RunMode
+    status    = 'RUNNING'
     loadIndex = 0
+    runMode   = $runSpec.mode
 }
 [IO.File]::WriteAllText($stateFile, ($state | ConvertTo-Json), (New-Object Text.UTF8Encoding($true)))
 
 # the image is on the target now: this is a real download, so the shared counter
 # moves (kept in readout\, outside .service, -Stop never resets it)
-$rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode $RunMode -Out $OutFile -Sha256 $outSha
+$rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode $runSpec.mode -Out $OutFile -Sha256 $outSha
 $state.loadIndex = $rec.count
 [IO.File]::WriteAllText($stateFile, ($state | ConvertTo-Json), (New-Object Text.UTF8Encoding($true)))
+Exit-TargetLock -ProjectPath $ProjectPath
 
 Info2 ('SERVICE : RUNNING (pid {0})' -f $cmdPid)
-Info2 ('MODE    : {0}' -f $RunMode)
+Info2 ('RUN MODE: {0}' -f $(if ($runSpec.continuous) {
+            'Iterate (continuous - this session is one round; a loop re-downloads)'
+        } else {
+            'SingleStep (load once, run forever; reads attach, ReadOnly never downloads)'
+        }))
 Info2 ('LOAD    : #{0} (this is download number {0} for this project, previous {1})' -f $rec.count, $rec.previous)
 Info2 ('LOG     : {0}' -f $logFile)
 Out2 'RESULT: OK'

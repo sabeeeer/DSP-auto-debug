@@ -21,7 +21,7 @@ Fields:
   firstLoad    timestamp of load #1
   lastLoad     timestamp of the most recent successful load
   lastSha256   sha256 of the image that was loaded
-  lastMode     SingleStep | Iterate
+  lastMode     SingleStep | Iterate | LoadRead | Explicit  (every way to download)
   history      last 20 loads, newest last (n / at / mode / out / sha256)
 
 Exit codes: not applicable (dot-source library, no side effects on import).
@@ -62,7 +62,7 @@ function Get-LoadCount {
 function Add-LoadRecord {
     param(
         [Parameter(Mandatory)][string]$ProjectPath,
-        [string]$Mode = 'SingleStep',
+        [ValidateSet('SingleStep', 'Iterate', 'LoadRead', 'Explicit')][string]$Mode = 'SingleStep',
         [string]$Out = '',
         [string]$Sha256 = '',
         [string]$At = ''
@@ -103,7 +103,7 @@ Test-LoadExpectation -- evaluate "name OP value" checks against one sample row.
   $r.ok        -> $false
   $r.checks    -> @('gBufSeq>=3 -> got 1, FAIL', 'gErr==0 -> got 0, OK')
 
-Used by the iterate (continuous) mode to decide "data is right, stop reloading".
+Used by the LoadRead -MaxLoads loop to decide "data is right, stop reloading".
 Badly formed expressions are reported as UNPARSED and count as a failure, so a
 typo can never be mistaken for success.
 #>

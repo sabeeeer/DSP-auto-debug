@@ -150,6 +150,7 @@ if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
 
 Info2 "PROJECT : $ProjectPath"
 Info2 ('SERVICE : pid {0}, loaded {1}' -f $svcPid, $state.started)
+Info2 'MODE    : ReadOnly attach - this process never downloads'
 . (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
 $loadIdx = $state.loadIndex
 if (-not $loadIdx) {

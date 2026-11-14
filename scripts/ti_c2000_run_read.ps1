@@ -1,17 +1,20 @@
 #requires -Version 7.0
 <#
-ti_c2000_run_read.ps1 -- low-speed read of a running session (attach, never reload).
+ti_c2000_run_read.ps1 -- low-speed read. Two read modes, one execution mode.
 
-Default path: attach to the live session started by ti_c2000_service.ps1 and ask
-it for values. No connect, no reset, no loadProgram -- so the numbers describe the
-program that is already running, and repeated reads keep describing the same run.
+  -Mode ReadOnly (default) : never downloads. Attaches to the live session started by
+        ti_c2000_service.ps1 (load once, run forever) and asks it for values, after
+        four proofs: probe enumerated, session alive, sha256(out) == state.outSha256,
+        and the entry symbol sits below 0x080000 (RAM, not Flash). A failed or
+        unprovable proof means refusal (exit 4) - it never starts a download itself.
+        -NoProbeCheck skips the enumeration; -AllowUnverified reads without the RAM
+        proof and logs that it did.
+  -Mode LoadRead           : downloads once, runs, reads, exits. Requires
+        -ConfirmLoad; the caller may only pass it after the user said yes to
+        "是否编译下载并运行". -MaxLoads N repeats the whole cycle until -Expect
+        passes, keeping every attempt under readout\loadread\attempt-N.
 
-If no session exists, starting one means exactly ONE download. Single-step mode
-refuses to do that unless -ConfirmLoad is passed, and the caller may only pass it
-after the user answered yes to "是否编译下载并运行". Exit code 4 = not confirmed.
-
-- Standalone: emergency one-process load+read (old behaviour). Requires -ConfirmLoad
-  too, because it re-flashes and restarts the target.
+- Standalone is a legacy alias for -Mode LoadRead (old command lines keep working).
 
 Liveness proof (see references/data-read-verdict.md):
   - every readable heartbeat candidate is checked for advancement
@@ -19,8 +22,8 @@ Liveness proof (see references/data-read-verdict.md):
   - gMsTick / gRunMs style counters must start below -StartupMaxMs
   - -NoHeartbeat disables the check explicitly (not recommended)
 
-Exit code: 0 OK | 1 failure | 2 environment/argument problem | 3 no probe
-           4 load not confirmed by the user (nothing was downloaded)
+Exit code: 0 OK | 1 failure | 2 environment/argument | 3 no probe
+           4 refused before downloading | 5 target held by another operation
 #>
 [CmdletBinding()]
 param(
@@ -43,18 +46,34 @@ param(
     [switch]$Build,
     [switch]$NoHeartbeat,
     [switch]$Quiet,
-    # SingleStep protects every download; Iterate is only used by ti_c2000_iterate.ps1
-    [ValidateSet('SingleStep', 'Iterate')][string]$RunMode = 'SingleStep',
+    # ReadOnly: attach and read, never download. LoadRead: download once, then read.
+    [ValidateSet('ReadOnly', 'LoadRead')][string]$Mode = 'ReadOnly',
     # pass only after the user said yes to "compile/download and run?"
     [switch]$ConfirmLoad,
-    # emergency only: run load+read in this one process instead of the live session
-    [switch]$Standalone
+    # LoadRead only: repeat the download+read cycle until these conditions hold
+    [string[]]$Expect = @(),
+    [int]$MaxLoads = 1,
+    # legacy alias for -Mode LoadRead
+    [switch]$Standalone,
+    # ReadOnly: skip the probe enumeration (fast, but an unplugged probe then shows
+    # up as a read timeout instead of NO_PROBE)
+    [switch]$NoProbeCheck,
+    # ReadOnly: read even when the entry symbol cannot be read, i.e. RAM is unproven
+    [switch]$AllowUnverified
 )
 
 $ErrorActionPreference = 'Continue'
 function Out2($m) { Write-Output $m }
 function Info2($m) { if (-not $Quiet) { Write-Output $m } }
-. (Join-Path $PSScriptRoot 'ti_c2000_loadcount.ps1')
+# single exit point for success, so a run emits exactly one RESULT: OK no matter which
+# branch finished (one-shot, ReadOnly attach, or a converged -MaxLoads loop)
+function Complete-Run { Out2 'RESULT: OK'; exit 0 }
+. (Join-Path $PSScriptRoot 'ti_c2000_readmode.ps1')
+
+# -Standalone is the old spelling of "download this time"; fold it into -Mode so
+# there is exactly one state, then let the interlock validate the combination.
+if ($Standalone) { $Mode = 'LoadRead' }
+$spec = Resolve-ReadModeSpec -Mode $Mode -ConfirmLoad:$ConfirmLoad -Build:$Build -Expect $Expect -MaxLoads $MaxLoads -NoProbeCheck:$NoProbeCheck -AllowUnverified:$AllowUnverified
 
 $names = @($Variables | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($names.Count -eq 0) { Out2 'FAILURE: NEED_VARIABLES'; Out2 'RESULT: FAIL'; Out2 'REASON: -Variables requires at least one expression'; exit 2 }
@@ -73,6 +92,12 @@ if (@($names | Where-Object { $_ -notmatch "^$pathPattern$" }).Count -gt 0 -or
 
 if (-not (Test-Path (Join-Path $ProjectPath '.cproject'))) { Out2 'FAILURE: NO_PROJECT'; Out2 'RESULT: FAIL'; Out2 "REASON: no .cproject under '$ProjectPath'"; exit 2 }
 $ProjectPath = (Get-Item -LiteralPath $ProjectPath).FullName
+
+# a continuous run owns the target while it lasts: it re-downloads every round, so an
+# attached read would describe a run that is already gone, and a second downloader
+# would fight its loop. Both are refused here, before any DSS work.
+Assert-RunModeInterlock -ProjectPath $ProjectPath -ReadMode $spec.mode
+
 $projName = Split-Path -Leaf $ProjectPath
 $projectFile = Join-Path $ProjectPath '.project'
 if (Test-Path -LiteralPath $projectFile) {
@@ -97,67 +122,99 @@ if (-not (Test-Path -LiteralPath $debugScript)) { Out2 'FAILURE: ENV_NO_DEBUG_SC
 $pwshExe = Join-Path $PSHOME 'pwsh.exe'
 if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
 
-# ---------- default: attach to the one live session (load once, read many) ----------
-# Loading on every call means every call restarts the program, so two reads never
-# describe the same run. The service loads once and keeps running; this reader only
-# asks it for values.
-if (-not $Standalone) {
-    $svcState = Join-Path $ProjectPath 'readout\.service\state.json'
-    $svcReady = Join-Path $ProjectPath 'readout\.service\ready.txt'
-    $live = $false
-    if ((Test-Path -LiteralPath $svcState) -and (Test-Path -LiteralPath $svcReady)) {
-        try {
-            $svc = Get-Content -LiteralPath $svcState -Raw | ConvertFrom-Json
-            $live = [bool](Get-Process -Id ([int]$svc.pid) -ErrorAction SilentlyContinue)
-        } catch { $live = $false }
-    }
-    if (-not $live) {
-        # starting the session IS one download: gate it, never do it silently
-        if ($RunMode -eq 'SingleStep' -and -not $ConfirmLoad) {
-            $cnt = Get-LoadCount -ProjectPath $ProjectPath
-            Out2 'FAILURE: LOAD_NOT_CONFIRMED'; Out2 'RESULT: FAIL'
-            Out2 'REASON: no live session; starting one downloads the image once, and single-step mode never does that on its own'
-            Out2 ('HINT    : ask the user "是否编译下载并运行？" first, then re-run with -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
-            Out2 'HINT    : if a session is already running, plain reads need no confirmation and no download'
-            exit 4
-        }
-        Info2 'STEP    : start the live session (one load, then reads attach to it)'
-        $sargs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_service.ps1'),
-            '-ProjectPath', $ProjectPath, '-Start', '-RunMode', $RunMode)
-        if ($Ccxml) { $sargs += @('-Ccxml', $Ccxml) }
-        if ($OutFile) { $sargs += @('-OutFile', $OutFile) }
-        if ($CcsRoot) { $sargs += @('-CcsRoot', $CcsRoot) }
-        if ($CorePattern) { $sargs += @('-CorePattern', $CorePattern) }
-        if ($Build) { $sargs += '-Build' }
-        if ($ConfirmLoad) { $sargs += '-ConfirmLoad' }
-        if ($Quiet) { $sargs += '-Quiet' }
-        $sout = & $pwshExe @sargs 2>&1
-        foreach ($line in $sout) { if ([string]$line -notmatch '^RESULT:') { Out2 ([string]$line) } }
-        if ($LASTEXITCODE -ne 0) {
-            if ($LASTEXITCODE -eq 4) { exit 4 }
-            Out2 'FAILURE: SERVICE_START_FAILED'; Out2 'RESULT: FAIL'
-            Out2 'REASON: could not start the live session; fix the service error above'; exit 1
-        }
-    } elseif ($Build) {
-        Out2 'NOTE    : -Build ignored, the live session already holds a loaded image; restart the service to rebuild'
-    }
-    $largs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_live_read.ps1'),
-        '-ProjectPath', $ProjectPath, '-Variables', ($names -join ','),
-        '-Rounds', [string]$Rounds, '-IntervalMs', [string]$IntervalMs, '-HeartbeatExpr', $HeartbeatExpr)
-    if ($NoHeartbeat) { $largs += '-NoHeartbeat' }
-    if ($Quiet) { $largs += '-Quiet' }
-    & $pwshExe @largs
-    exit $LASTEXITCODE
+# ---------- LoadRead with -MaxLoads N: repeat the one-shot cycle until -Expect ----
+# Each attempt is a separate process that downloads, runs and reads, so the load
+# path stays single. The child never loops itself (env marker).
+if ($spec.maxLoads -gt 1 -and -not $env:TI_C2000_LOADREAD_CHILD) {
+    $loop = Invoke-LoadReadLoop -ScriptPath $PSCommandPath -Bound $PSBoundParameters `
+        -Expect $spec.expect -MaxLoads $spec.maxLoads -ProjectPath $ProjectPath `
+        -CsvPath (Join-Path $ProjectPath 'readout\data\data.csv') `
+        -VerdictPath (Join-Path $ProjectPath 'readout\check\verdict.txt') -Quiet:$Quiet
+    if ($loop.converged) { Complete-Run }
+    Out2 'FAILURE: LOADREAD_NOT_CONVERGED'; Out2 'RESULT: FAIL'
+    Out2 ('REASON: ' + $loop.reason + ' (' + $loop.attempts + ' download(s) tried)')
+    Out2 'HINT    : attempts are kept under readout\loadread - decide whether the firmware or the expectation is wrong'
+    exit 1
 }
 
-# ---------- emergency standalone path: this one DOES load ----------
-if (-not $ConfirmLoad) {
-    $cnt = Get-LoadCount -ProjectPath $ProjectPath
-    Out2 'FAILURE: RELOAD_BLOCKED'; Out2 'RESULT: FAIL'
-    Out2 'REASON: -Standalone loads the program again, which restarts the target and invalidates any earlier reading'
-    Out2 ('HINT    : reads normally attach to the live session; if a reload is really intended, confirm with the user and add -ConfirmLoad (next download would be #' + ([int]$cnt.count + 1) + ')')
-    exit 4
+# ---------- ReadOnly: attach to the one live session, never load -----------------
+# Loading on every call means every call restarts the program, so two reads never
+# describe the same run. The service loads once and keeps running; this reader only
+# asks it for values, after proving it is still our image running from RAM.
+if ($spec.mode -eq 'ReadOnly') {
+    $s = Get-LiveSessionInfo -ProjectPath $ProjectPath
+    if (-not $s.alive) {
+        $cnt = Get-LoadCount -ProjectPath $ProjectPath
+        Out2 'FAILURE: NO_SESSION'; Out2 'RESULT: FAIL'
+        Out2 ('REASON: ReadOnly never downloads, and ' + $s.reason)
+        Out2 'HINT    : ask the user "是否编译下载并运行？" first, then re-run with -Mode LoadRead -ConfirmLoad'
+        Out2 ('          (that would be download #' + ([int]$cnt.count + 1) + ' for this project)')
+        exit 4
+    }
+    # a session whose JTAG link died still has a live pid and a matching sha256, so
+    # "process alive" is not enough - the probe has to be enumerated first
+    Assert-ProbeOnline -ProjectPath $ProjectPath -DebugScript $debugScript -CcsRoot $CcsRoot -Skip:$NoProbeCheck -Quiet:$Quiet
+
+    if (-not (Test-Path -LiteralPath $OutFile)) {
+        Out2 'FAILURE: NO_OUT_FILE'; Out2 'RESULT: FAIL'; Out2 ('REASON: missing ' + $OutFile); exit 2
+    }
+    $curSha = (Get-FileHash -LiteralPath $OutFile -Algorithm SHA256).Hash
+    if ($curSha -ne [string]$s.state.outSha256) {
+        Out2 'FAILURE: STALE_SERVICE'; Out2 'RESULT: FAIL'
+        Out2 ('REASON: the session loaded a different image (session {0}, disk {1})' -f $s.state.outSha256, $curSha)
+        Out2 'HINT    : the .out was rebuilt after the load; reading it now would mix two builds'
+        Out2 'HINT    : -Stop the session and start it again (-Start -ConfirmLoad) to load the new image'
+        exit 2
+    }
+    if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'ReadOnly')) { exit 5 }
+    try {
+        Info2 ('JUDGE   : session alive (pid {0}, loaded {1}, LOAD #{2})' -f $s.state.pid, $s.state.started, $(if ($s.state.loadIndex) { $s.state.loadIndex } else { '?' }))
+        Info2 ('JUDGE   : image matches this build (sha256 {0})' -f $curSha.Substring(0, 16))
+        $ram = Test-RamImageEvidence -ProjectPath $ProjectPath -AllowUnverified:$AllowUnverified
+        Info2 ('JUDGE   : ' + $ram.text)
+        if (-not $ram.ok) {
+            if ($ram.verified) {
+                Out2 'FAILURE: NOT_RAM_IMAGE'; Out2 'RESULT: FAIL'
+                Out2 'REASON: the code answering on the target sits in Flash, not the RAM image this session loaded (board was reset, power-cycled or flashed with something else)'
+                Out2 'HINT    : start the session again with -Start -ConfirmLoad to put our image back in RAM'
+            } else {
+                Out2 'FAILURE: RAM_UNVERIFIED'; Out2 'RESULT: FAIL'
+                Out2 'REASON: the entry symbol (main / _c_int00 / code_start) could not be read, so "this is our RAM image" is unproven - an unproven RAM image is how stale numbers get reported as fresh'
+                Out2 'HINT    : check the probe is attached and the program is running (not halted); -AllowUnverified reads anyway and logs that it did'
+            }
+            exit 4
+        }
+        # say the sampling period out loud: a polled read is not a scope, and the
+        # caller must be able to tell "1.8 Hz" from "my signal updates every 100 ms"
+        $sEst = ($IntervalMs + 85) / 1000.0
+        Info2 ('RATE    : ~{0:N2} s per sample ({1} ms wait + 50~120 ms tool) -> change period should be >= {2:N1} s' -f $sEst, $IntervalMs, (10 * $sEst))
+        $largs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_live_read.ps1'),
+            '-ProjectPath', $ProjectPath, '-Variables', ($names -join ','),
+            '-Rounds', [string]$Rounds, '-IntervalMs', [string]$IntervalMs, '-HeartbeatExpr', $HeartbeatExpr)
+        if ($NoHeartbeat) { $largs += '-NoHeartbeat' }
+        if ($Quiet) { $largs += '-Quiet' }
+        & $pwshExe @largs
+        exit $LASTEXITCODE
+    } finally {
+        Exit-TargetLock -ProjectPath $ProjectPath
+    }
 }
+
+# ---------- LoadRead: this path DOES load (confirmed by the caller) --------------
+# A live session owns the probe, so it is stopped first: one image at a time, and
+# no reader can attach to a half-written target.
+$liveNow = Get-LiveSessionInfo -ProjectPath $ProjectPath
+if ($liveNow.alive) {
+    Info2 'STEP    : stop the live session first (a download needs the probe)'
+    $stopArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'ti_c2000_service.ps1'),
+        '-ProjectPath', $ProjectPath, '-Stop', '-Quiet')
+    $stopOut = & $pwshExe @stopArgs 2>&1
+    foreach ($line in $stopOut) { if ([string]$line -match '^FAILURE:') { Out2 ([string]$line) } }
+}
+if (-not (Enter-TargetLock -ProjectPath $ProjectPath -Mode 'LoadRead')) { exit 5 }
+# everything below owns the target; the finally at the end of the file releases the
+# lock on every exit path, including failures and Ctrl-C
+try {
 
 $probeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $debugScript, '-ProjectPath', $ProjectPath, '-ProbeCheckOnly')
 if ($CcsRoot) { $probeArgs += @('-CcsRoot', $CcsRoot) }
@@ -564,7 +621,9 @@ if ($vcode -ne 0 -or -not @($vout | Where-Object { $_ -match '^RESULT: OK\s*$' }
 }
 
 Publish-Readout 'OK' 'mandatory CSV verdict passed' 'OK'
-$rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode 'Standalone' -Out $OutFile -Sha256 $outShaBefore
-Info2 ('LOAD    : #{0} (standalone: this call downloaded the image and restarted the program)' -f $rec.count)
-Out2 'RESULT: OK'
-exit 0
+$rec = Add-LoadRecord -ProjectPath $ProjectPath -Mode 'LoadRead' -Out $OutFile -Sha256 $outShaBefore
+Info2 ('LOAD    : #{0} (LoadRead: this call downloaded the image and restarted the program)' -f $rec.count)
+Complete-Run
+} finally {
+    Exit-TargetLock -ProjectPath $ProjectPath
+}
