@@ -51,6 +51,16 @@ pwsh -NoProfile -File tools/sync_platform_copies.ps1            # 执行，并�
 
 源永远是 `~/.codebuddy/skills/ti-c2000-ccs-auto`；目标自动发现已存在的平台副本，`PRUNE` 会删掉目标里多出来的旧文件（`-NoPrune` 可保留）。**改完 skill 就要同步一次**，否则别的工具继续跑旧版。
 
+**"审核通过"≠"内容正确"，也不是"内容最新"**。Codex 自带 `skill-creator` 的 `quick_validate.py` 可以复核格式（本 skill 实测 `Skill is valid!`）：
+
+```powershell
+# 只查 frontmatter / 命名（≤64 字符）/ 未完成的脚手架占位符
+$env:PYTHONUTF8 = '1'
+& python "$env:USERPROFILE\.codex\skills\.system\skill-creator\scripts\quick_validate.py" "$env:USERPROFILE\.codex\skills\ti-c2000-ccs-auto"
+```
+
+那条脚本自己的注释写明：**"it does not prove that the skill makes good decisions"**。它过了只说明"Codex 能识别、能触发"，不说明规则正确、更不说明是最新版。所以它是**第四条旁证**，不能替代上面的三点校验，也不能替代同步。
+
 ## 两种运行模式 × 两种读模式（互锁）
 
 **下载是唯一会重启程序、也是唯一在磨损目标的操作，因此被单独管起来。**默认永远是单步；连续模式必须用户点名。
