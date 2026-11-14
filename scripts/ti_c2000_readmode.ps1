@@ -535,3 +535,112 @@ function Invoke-LoadReadLoop {
     Write-Output ('LOADS   : {0} download(s) in this loop, attempts kept in {1}' -f ($done), $iterDir)
     return [ordered]@{ converged = $converged; attempts = $done; reason = $reason }
 }
+
+<#
+SKILL IDENTITY AND PROJECT HYGIENE -- the two things that make "the run went through
+the skill" checkable instead of assumed.
+
+A document can only ask an AI to use the skill; it cannot prove the run did. So every
+entry point calls Initialize-SkillRun once, which
+  1. refuses (or at least shouts) when the project still holds a copy of a skill
+     script, because that copy is what actually executes,
+  2. appends one line to <project>\readout\skill-runs.jsonl naming this script, this
+     skill directory and its version, so check_project_entry.ps1 -MaxRunAgeMinutes can
+     later prove the last operation came from the skill and not from somewhere else.
+
+The version is the first 8 hex of sha256(SKILL.md): it changes when the skill changes,
+so a stale copy of the skill is visible in the record.
+#>
+$script:SkillCopyNamePattern = '^ti_c2000_.*\.(ps1|js)$'
+$script:SkillCopyExact = @('verify_on_target.ps1', 'dss_load_run_read.js', 'run_hold.js')
+
+function Get-SkillIdentity {
+    $skillRoot = Split-Path $PSScriptRoot -Parent
+    $ver = 'unknown'
+    $md = Join-Path $skillRoot 'SKILL.md'
+    if (Test-Path -LiteralPath $md) {
+        try {
+            $h = (Get-FileHash -LiteralPath $md -Algorithm SHA256).Hash
+            $ver = $h.Substring(0, 8).ToLower()
+        } catch { }
+    }
+    return [ordered]@{ root = $skillRoot; version = $ver }
+}
+
+function Get-SkillScriptCopies {
+    param([Parameter(Mandatory)][string]$ProjectPath)
+    if (-not (Test-Path -LiteralPath $ProjectPath)) { return @() }
+    return @(Get-ChildItem -LiteralPath $ProjectPath -Recurse -File -Include *.ps1, *.js -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\\.git\\' } |
+        Where-Object { $_.Name -match $script:SkillCopyNamePattern -or $script:SkillCopyExact -contains $_.Name })
+}
+
+function Write-SkillRunRecord {
+    param(
+        [Parameter(Mandatory)][string]$ProjectPath,
+        [Parameter(Mandatory)][string]$Script,
+        [string]$Mode = '',
+        [Parameter(Mandatory)]$Identity
+    )
+    $dir = Join-Path $ProjectPath 'readout'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $path = Join-Path $dir 'skill-runs.jsonl'
+    $rec = [ordered]@{
+        at      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        pid     = $PID
+        script  = $Script
+        mode    = $Mode
+        skill   = $Identity.root
+        version = $Identity.version
+    }
+    try {
+        $line = ($rec | ConvertTo-Json -Compress)
+        # keep the file bounded: rotate to the last 200 lines instead of growing forever
+        if ((Test-Path -LiteralPath $path) -and ((Get-Item -LiteralPath $path).Length -gt 120KB)) {
+            $tail = @(Get-Content -LiteralPath $path -Encoding utf8 | Select-Object -Last 200)
+            [IO.File]::WriteAllLines($path, $tail, (New-Object Text.UTF8Encoding($false)))
+        }
+        [IO.File]::AppendAllText($path, ($line + "`n"), (New-Object Text.UTF8Encoding($false)))
+    } catch { }
+}
+
+<#
+Initialize-SkillRun -- one call per entry point. -Block makes a project that still holds
+a skill copy a hard refusal (used where the target is written: a download must not be
+decided by stale logic); without it the run continues but says so.
+#>
+function Initialize-SkillRun {
+    param(
+        [Parameter(Mandatory)][string]$ProjectPath,
+        [string]$Script = '',
+        [string]$Mode = '',
+        [switch]$Block,
+        [switch]$Quiet
+    )
+    if (-not $Script) { $Script = Split-Path -Leaf $PSCommandPath }
+    $id = Get-SkillIdentity
+    if (-not $Quiet) { Write-Output ('SKILL   : ti-c2000-ccs-auto@' + $id.version) }
+
+    $copies = Get-SkillScriptCopies -ProjectPath $ProjectPath
+    if ($copies.Count -gt 0) {
+        if ($Block) {
+            Write-Output 'FAILURE: PROJECT_NOT_CLEAN'
+            Write-Output 'RESULT: FAIL'
+            Write-Output ('REASON: {0} copy/copies of skill scripts sit inside the project, so the run may execute that copy instead of the skill' -f $copies.Count)
+            foreach ($c in $copies | Select-Object -First 5) {
+                Write-Output ('         ' + $c.FullName.Substring($ProjectPath.Length).TrimStart('\'))
+            }
+            Write-Output 'HINT    : delete them (they are superseded by this skill), then re-run'
+            Write-Output ('HINT    : verify with check_project_entry.ps1 -ProjectPath ' + $ProjectPath)
+            exit 2
+        }
+        Write-Output ('WARN    : {0} copy/copies of skill scripts in this project - reads may follow stale logic' -f $copies.Count)
+        foreach ($c in $copies | Select-Object -First 3) {
+            Write-Output ('WARN    :   ' + $c.FullName.Substring($ProjectPath.Length).TrimStart('\'))
+        }
+    }
+    Write-SkillRunRecord -ProjectPath $ProjectPath -Script $Script -Mode $Mode -Identity $id
+    # callers use the console lines; the object is kept here rather than returned so a
+    # plain `Initialize-SkillRun ...` call passes the SKILL line straight through
+    $script:LastSkillIdentity = $id
+}

@@ -30,6 +30,27 @@ pwsh -NoProfile -File scripts/check_project_entry.ps1 -ProjectPath <CCS 工程�
 
 它查四件事，任一不满足即 `RESULT: FAIL`（exit 1）并逐条给 `VIOLATION:`：① 工程内没有 skill 脚本副本；② 工程目录或其上层（≤3 层）有入口文档；③ 每份入口文档都提到 `ti-c2000-ccs-auto`；④ 没有哪一行仍在让人去跑已删除的副本。**`RESULT: OK` 才是"这个工程会按 skill 运行"**。
 
+### 三个校验点（"在用这个 skill"必须可证，不能靠声明）
+
+| # | 时机 | 手段 | 失败表现 |
+|---|---|---|---|
+| ① **事前** | 开始操作前 | `check_project_entry.ps1 -ProjectPath <工程>` | `VIOLATION:` 逐条列出：有副本 / 缺入口文档 / 文档没提 skill / 仍指向已删脚本 |
+| ② **事中** | 每次运行 | 每个入口都打印 `SKILL   : ti-c2000-ccs-auto@<ver>`（`<ver>` = `sha256(SKILL.md)` 前 8 位），并追加一行到 `<工程>\readout\skill-runs.jsonl` | 输出里**没有** `SKILL   :` 行 = 这次操作不是本 skill 跑的 |
+| ③ **事后** | 收尾 / 怀疑走偏 | `check_project_entry.ps1 -MaxRunAgeMinutes N` | 最近一次运行过旧，或来自另一个 skill 目录 → `RESULT: FAIL` |
+
+②还兼一个硬门禁：**工程内若存在 skill 脚本副本**，写目标的入口（`service -Start`、`iterate`）直接 `PROJECT_NOT_CLEAN`(2) 拒绝——副本才是实际执行者，不能让它决定一次下载；只读入口只给 `WARN` 并继续（读不会损坏目标）。
+
+### 多平台副本必须同步（这是"换了工具就不按 skill 跑"的常见真因）
+
+有的工具把 skill 放在自己的目录里（如 Codex 的 `%USERPROFILE%\.codex\skills\<name>`），读的是**它自己那份副本**，不会跟着本目录更新。实测 2026-11-14：Codex 那份是几天前的旧版（70 文件 / `SKILL.md` 7479 B，还留着已删除的 `ti_c2000_read_runtime.ps1`），于是"按 skill 跑"实际上跑的是旧规则——**看起来完全正确，比报错更危险**。
+
+```powershell
+pwsh -NoProfile -File tools/sync_platform_copies.ps1 -DryRun   # 先看计划：ADD / UPDATE / KEEP / PRUNE
+pwsh -NoProfile -File tools/sync_platform_copies.ps1            # 执行，并自证同步后完全一致
+```
+
+源永远是 `~/.codebuddy/skills/ti-c2000-ccs-auto`；目标自动发现已存在的平台副本，`PRUNE` 会删掉目标里多出来的旧文件（`-NoPrune` 可保留）。**改完 skill 就要同步一次**，否则别的工具继续跑旧版。
+
 ## 两种运行模式 × 两种读模式（互锁）
 
 **下载是唯一会重启程序、也是唯一在磨损目标的操作，因此被单独管起来。**默认永远是单步；连续模式必须用户点名。

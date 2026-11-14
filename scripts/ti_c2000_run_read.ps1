@@ -93,6 +93,11 @@ if (@($names | Where-Object { $_ -notmatch "^$pathPattern$" }).Count -gt 0 -or
 if (-not (Test-Path (Join-Path $ProjectPath '.cproject'))) { Out2 'FAILURE: NO_PROJECT'; Out2 'RESULT: FAIL'; Out2 "REASON: no .cproject under '$ProjectPath'"; exit 2 }
 $ProjectPath = (Get-Item -LiteralPath $ProjectPath).FullName
 
+# a read never writes the target, so a leftover copy of a skill script is reported but
+# not fatal; the run is still stamped so check_project_entry.ps1 can prove later that
+# this read came from the skill
+Initialize-SkillRun -ProjectPath $ProjectPath -Script 'ti_c2000_run_read.ps1' -Mode $spec.mode -Quiet:$Quiet
+
 # a continuous run owns the target while it lasts: it re-downloads every round, so an
 # attached read would describe a run that is already gone, and a second downloader
 # would fight its loop. Both are refused here, before any DSS work.

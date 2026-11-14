@@ -92,6 +92,10 @@ $checks = @($Expect | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_
 # nothing else may own the target, and no other iterate may be running
 Assert-RunModeInterlock -ProjectPath $ProjectPath -What 'ti_c2000_iterate.ps1'
 
+# this loop re-downloads every round, so it is one of the places a stale copy would be
+# most expensive: refuse to start while the project still holds one
+Initialize-SkillRun -ProjectPath $ProjectPath -Script 'ti_c2000_iterate.ps1' -Mode 'Iterate' -Block -Quiet:$Quiet
+
 $pwshExe = Join-Path $PSHOME 'pwsh.exe'
 if (-not (Test-Path -LiteralPath $pwshExe)) { $pwshExe = 'pwsh' }
 $svcScript = Join-Path $PSScriptRoot 'ti_c2000_service.ps1'

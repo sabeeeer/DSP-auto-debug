@@ -120,6 +120,10 @@ if ($total -gt 100000) { Out2 'FAILURE: ARRAY_TOO_LARGE'; Out2 'RESULT: FAIL'; O
 if (-not (Test-Path (Join-Path $ProjectPath '.cproject'))) { Out2 'FAILURE: NO_PROJECT'; Out2 'RESULT: FAIL'; Out2 "REASON: no .cproject under '$ProjectPath'"; exit 2 }
 $ProjectPath = (Get-Item -LiteralPath $ProjectPath).FullName
 
+# stamp the run with this skill's identity (a read cannot damage anything, so a
+# leftover copy is only reported); see ti_c2000_readmode.ps1 Initialize-SkillRun
+Initialize-SkillRun -ProjectPath $ProjectPath -Script 'ti_c2000_read_dma.ps1' -Mode $spec.mode -Quiet:$Quiet
+
 # a continuous run owns the target while it lasts (see ti_c2000_readmode.ps1)
 Assert-RunModeInterlock -ProjectPath $ProjectPath -ReadMode $spec.mode
 

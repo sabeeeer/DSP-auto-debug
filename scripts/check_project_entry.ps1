@@ -21,6 +21,10 @@ param(
     [Parameter(Mandatory)][string]$ProjectPath,
     # how many levels above the CCS project folder to look for the entry documents
     [int]$EntrySearchDepth = 3,
+    # 0 = do not look at the run log. N > 0 requires the newest entry in
+    # readout\skill-runs.jsonl to be at most N minutes old and to come from this skill,
+    # i.e. proof that the last operation actually went through the skill.
+    [int]$MaxRunAgeMinutes = 0,
     [switch]$Quiet
 )
 
@@ -110,6 +114,38 @@ if ($found.Count -eq 0) {
     # only ships the CodeBuddy file silently loses every non-CodeBuddy tool.
     if (-not $hasAgents) {
         $violations.Add('AGENTS.md is missing in every level searched - Codex / generic tools would open this project with no entry document at all')
+    }
+}
+
+# ---------- 3. proof that the last operation came from this skill ----------------
+# Documents ask; the run log proves. Every entry point stamps readout\skill-runs.jsonl
+# with its script, this skill's directory and the sha256 of SKILL.md, so "the last thing
+# that touched this project really was the skill" becomes a fact that can be checked.
+if ($MaxRunAgeMinutes -gt 0) {
+    $log = Join-Path $root 'readout\skill-runs.jsonl'
+    $skillRoot = Split-Path $PSScriptRoot -Parent
+    if (-not (Test-Path -LiteralPath $log)) {
+        $violations.Add(('no skill run recorded in {0} - nothing in this project has gone through the skill yet' -f $log))
+    } else {
+        $last = $null
+        try {
+            $last = @(Get-Content -LiteralPath $log -Encoding utf8 | Where-Object { $_.Trim() } | Select-Object -Last 1)[0] | ConvertFrom-Json
+        } catch { }
+        if (-not $last) {
+            $violations.Add('readout\skill-runs.jsonl exists but the last line is unreadable')
+        } else {
+            $age = $null
+            try { $age = ((Get-Date) - [datetime]::ParseExact([string]$last.at, 'yyyy-MM-dd HH:mm:ss', $null)).TotalMinutes } catch { }
+            if ($null -eq $age) {
+                $violations.Add(('the newest skill run has an unreadable timestamp: {0}' -f $last.at))
+            } elseif ($age -gt $MaxRunAgeMinutes) {
+                $violations.Add(('the newest skill run is {0:N0} min old (limit {1}) - start one from the skill before trusting this project' -f $age, $MaxRunAgeMinutes))
+            } elseif (([string]$last.skill).TrimEnd('\') -ne $skillRoot.TrimEnd('\')) {
+                $violations.Add(('the newest run came from another skill copy ({0}), not from {1}' -f $last.skill, $skillRoot))
+            } else {
+                $notes.Add(('last skill run: {0} by {1} ({2}), skill@ {3}' -f $last.at, $last.script, $last.mode, $last.version))
+            }
+        }
     }
 }
 

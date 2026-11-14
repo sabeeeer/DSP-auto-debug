@@ -78,6 +78,19 @@ if (-not (Test-Path (Join-Path $ProjectPath '.cproject'))) {
 }
 $ProjectPath = (Get-Item -LiteralPath $ProjectPath).FullName
 
+# ---- identity + hygiene ------------------------------------------------------
+# -Start writes the target, so a stale copy of a skill script inside the project is a
+# hard refusal there (that copy is what would decide the download); -Stop/-Status only
+# report it. Either way the run is stamped into readout\skill-runs.jsonl, which is how
+# a later check can prove the operation came from this skill.
+if ($Start) {
+    Initialize-SkillRun -ProjectPath $ProjectPath -Script 'ti_c2000_service.ps1' -Mode 'Start' -Block -Quiet:$Quiet
+} elseif ($Stop) {
+    Initialize-SkillRun -ProjectPath $ProjectPath -Script 'ti_c2000_service.ps1' -Mode 'Stop' -Quiet:$Quiet
+} else {
+    Initialize-SkillRun -ProjectPath $ProjectPath -Script 'ti_c2000_service.ps1' -Mode 'Status'
+}
+
 # ---- run mode ----------------------------------------------------------------
 # SingleStep (default) or Iterate (continuous, only via ti_c2000_iterate.ps1).
 # -Status is pure reporting and stays available; Start/Stop must not fight a
