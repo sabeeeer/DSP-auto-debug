@@ -156,7 +156,7 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_check_read.ps1" `
 | `ti_c2000_run_read.ps1` | 写完 `data/data.csv` 后调用，指定读取变量必须是有限数字 |
 | `ti_c2000_read_dma.ps1` | 写完 `data/array.csv` 后调用（长表：`-AllowNoHeartbeat -RangeVars value`） |
 
-旧的 `ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1` / `ti_c2000_debug.ps1 -ReadOnly` 已禁用（`READONLY_UNRELIABLE`），不再接入判据。
+旧的 `ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1` / `ti_c2000_debug.ps1 -ReadOnly` 已从 skill 删除（不是禁用），不参与判据；`ti_c2000_debug.ps1` 只做编译/下载/运行。
 
 规则：
 - 判据失败 → `FAILURE: VERDICT_FAILED` + `RESULT: FAIL`，退出码 1；不允许"先返回成功、后提示校验"。

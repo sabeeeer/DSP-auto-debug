@@ -1,4 +1,4 @@
-# 单会话读取规则（旧「独立只读模式」已废弃）
+# 单会话读取规则（旧的独立只读模式已删除）
 
 **硬性规则：仿真器必须全程在线；调试器连接一旦断开，就不能再读数据。** `disconnect()` 会结束 JTAG 会话；所谓“断开后另起只读”其实是重新连接一个已经复位、跑 Flash 的目标，读到的不是本次 RAM 固件。这条规则没有例外。**仿真器在线 + 单会话**是读取 RAM 运行态数据的唯一前提。
 
@@ -17,11 +17,13 @@
 | **低速连续读** | `ti_c2000_run_read.ps1` | 不需要 DMA；默认 0.5 s × 10 轮（名义 5 s，实际含读取开销约 6 s）；时长 = `-Rounds` × `-IntervalMs`，100 s 用 `-Rounds 200 -IntervalMs 500` |
 | **高速 DMA 读** | `ti_c2000_read_dma.ps1 -FrozenBufferReady` | 固件已配 ADC + DMA（+ ping-pong）并置冻结标志/序号 |
 
-以下入口已禁用，调用直接返回 `FAILURE: READONLY_UNRELIABLE`（exit 2）：
+旧的独立只读入口**已从 skill 中删除**（不是禁用、不是留壳），不要再造：
 
-- `ti_c2000_read_runtime.ps1`
-- `ti_c2000_read_array_runtime.ps1`
-- `ti_c2000_debug.ps1 -ReadOnly/-ReadVars/-ReadArray`
+- ~~`ti_c2000_read_runtime.ps1`~~（已删）
+- ~~`ti_c2000_read_array_runtime.ps1`~~（已删）
+- ~~`ti_c2000_debug.ps1 -ReadOnly/-ReadVars/-ReadArray/-WaitFor`~~（参数已删；`ti_c2000_debug.ps1` 只剩编译/下载/运行，`-Build`、`-Run`、`-LoadOnly`、`-ProbeCheckOnly`）
+
+留着它们只会让人在“断开后再读”这条路上反复踩坑：入口存在就等于暗示这条路可用。
 
 ## 读取前必须确认是 RAM
 

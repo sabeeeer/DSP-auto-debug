@@ -16,4 +16,4 @@ pwsh -NoProfile -File .\scripts\ti_c2000_build.ps1 -ProjectPath "<工程>"
 pwsh -NoProfile -File .\scripts\ti_c2000_run_read.ps1 -ProjectPath "<工程>" -Variables "EPwm1Regs.TBPRD"
 ```
 
-**断开调试连接后不能再读**；旧 `read_runtime`/`read_array` 入口已禁用（`READONLY_UNRELIABLE`）。任何目标核、外设引脚或库兼容性均按当前器件和工程重新验证；DSP28335 与 F28379D 的已验证范围见[器件入口](../references/device-platform.md)。
+**断开调试连接后不能再读**；旧 `read_runtime`/`read_array` 入口已从 skill 删除。任何目标核、外设引脚或库兼容性均按当前器件和工程重新验证；DSP28335 与 F28379D 的已验证范围见[器件入口](../references/device-platform.md)。

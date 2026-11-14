@@ -15,8 +15,8 @@ the frozen buffer inside ONE session.
 
 Verdict (same rules as references/data-read-verdict.md, independent of mode):
   BUF_NOT_READY / NO_SEQ / BUF_CHANGED / COUNT_MISMATCH / VALUE_OUT_OF_RANGE
-The point-mode array reader (ti_c2000_read_array_runtime.ps1) needs no DMA and
-remains available for short captures.
+For a few unfrozen scalars or a slow state machine, use ti_c2000_run_read.ps1
+instead; it does not need DMA or a frozen buffer.
 
 Exit code: 0 OK | 1 failure | 2 argument/environment | 3 no probe
 #>

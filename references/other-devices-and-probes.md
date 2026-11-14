@@ -243,8 +243,8 @@ ADC/SCI/SPI/watchdog/eCAP 等），全部 `RESULT: OK`。
 ## 4. 双核 / 多核器件怎么办
 
 1. 每个核建自己的工程与 `.out`（cpu1/cpu2 分开）。
-2. DSS 只读侧用 **`-CorePattern ".*CPU1.*"`** 明确选择会话（默认 `.*` 取第一个匹配核心）。TI 的 `loadti` CLI 支持 `-cpu/--cpu-name` 指定单个目标核；本技能当前 `ti_c2000_debug.ps1` 未透传这个参数，因此使用包装脚本下载时仍须核对 `.ccxml` 默认核，或为各核准备明确的目标配置。直接使用 `loadti -cpu` 时，CPU 名称须来自实际 `.ccxml`，不可仅按器件型号猜测。下载/复位只用于执行模式，不用于读数。
-3. 读变量时 `-ReadVars` / `-WaitFor` 里的符号必须在**该核**的符号表里；跨核读取要用 IPC/共享内存变量。
+2. 读数入口用 **`-CorePattern ".*CPU1.*"`** 明确选择会话（默认 `.*` 取第一个匹配核心，会误撞 CPU2 或 CLA1）。TI 的 `loadti` CLI 支持 `-cpu/--cpu-name` 指定单个目标核；本技能当前 `ti_c2000_debug.ps1` 未透传这个参数，因此使用包装脚本下载时仍须核对 `.ccxml` 默认核，或为各核准备明确的目标配置。直接使用 `loadti -cpu` 时，CPU 名称须来自实际 `.ccxml`，不可仅按器件型号猜测。下载/复位只用于执行模式，不用于读数。
+3. 读变量时 `-Variables` 里的符号必须在**该核**的符号表里；跨核读取要用 IPC/共享内存变量。
 4. F2838x 还有 Cortex-M4 核：它的工程是 ARM 编译器（`ti-cgt-arm*`），本 skill 只覆盖 C28x 侧。
 
 ## 5. 换型号/换板后 skill 需要你补充的信息

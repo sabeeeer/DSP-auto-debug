@@ -1,4 +1,4 @@
-# 执行模式：工程修改与上板验证
+﻿# 执行模式：工程修改与上板验证
 
 执行顺序：**可行时读现有固件基线 → 分析 → 必要时修改、构建 → 一次加载、运行并在同一 DSS 会话读取验证**。加载前的复位/停核只属于执行模式；程序运行后的读数不得主动停核或再次加载。DSP28335 的 RAM 工程已观察到另起只读读到 Flash 地址，不能用那次读数验收 RAM `.out`。
 
@@ -56,7 +56,7 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_dma.ps1" `
 
 ## 4. 运行态复读与判定
 
-同一 DSS 会话中 `runAsynch()` 后读取，至少检查一个实际递增的应用计数器；只看 `isHalted()==false` 或单次变量值不够。对照基线与新数据时保持同一器件、输入、采样率、窗口和换算方法。会话结束可能改变某些板上的运行状态，不能把脚本退出后的状态视为已验证。只读脚本仍拒绝 `-Build/-Run/-LoadOnly` 与 `-ReadVars` 同次调用。
+同一 DSS 会话中 `runAsynch()` 后读取，至少检查一个实际递增的应用计数器；只看 `isHalted()==false` 或单次变量值不够。对照基线与新数据时保持同一器件、输入、采样率、窗口和换算方法。会话结束可能改变某些板上的运行状态，不能把脚本退出后的状态视为已验证。`ti_c2000_debug.ps1` 只做编译/下载/运行，`-ReadVars` 等读数参数已删除，读数走 `ti_c2000_run_read.ps1` 或 `ti_c2000_read_dma.ps1`。
 
 ## 失败时查哪里
 
@@ -64,7 +64,7 @@ pwsh -NoProfile -File "<skill>\scripts\ti_c2000_read_dma.ps1" `
 |---|---|
 | `COMPILE_ERRORS`、`LINK_ERRORS`、`.text` 装不下 | 构建日志、`.cproject` 的宏/排除项、源文件和 `.cmd`；内存问题见[RAM 与链接](ram-and-linker.md)及 `scripts/check_ram_layout.ps1`。 |
 | `NO_PROBE`、`CONNECT_FAILED`、`LOADTI_ERROR/TIMEOUT` | 原始错误、探针型号/串号、`.ccxml`、供电、JTAG 和 CCS GUI 占用；见[探针与双核](other-devices-and-probes.md)。 |
-| `TIMEOUT`、读回全零或数值矛盾 | 等待条件、`.out` 身份、运行状态、ADC 对齐和寄存器访问语义；见[只读规则](read-only-mode.md)与[DSS 诊断](dss-debug.md)。 |
+| `TIMEOUT`、读回全零或数值矛盾 | 等待条件、`.out` 身份、运行状态、ADC 对齐和寄存器访问语义；见[只读规则](single-session-read.md)与[DSS 诊断](dss-debug.md)。 |
 | 波形、串口或外设现场故障 | 从[第三类案例索引](debugging-experience.md)按器件、模块、现象找，不直接推广其他工程的结论。 |
 
 无探针时停止上板任务并询问用户；不声称上板通过。DSP28335 的[官方例程上板范围](board-tests-dsp28335.md)与 F28379D 的[探针/双核记录](other-devices-and-probes.md)分别保留；未验证的外设引脚或负载另行标注。

@@ -30,4 +30,4 @@ pwsh -NoProfile -File .\scripts\ti_c2000_read_dma.ps1 -ProjectPath "<工程根�
   -ArrayName gAdcAllBuf -Rows 16 -Columns 200 -FrozenBufferReady
 ```
 
-每步以 `RESULT: OK` **且退出码 0** 为成功。旧 `read_runtime`/`read_array` 入口已禁用（`READONLY_UNRELIABLE`），不要重新启用独立只读会话。操作规则见 [SKILL.md](SKILL.md)。
+每步以 `RESULT: OK` **且退出码 0** 为成功。旧 `read_runtime`/`read_array` 入口已从 skill 删除（不是禁用），不要重新造独立只读会话。操作规则见 [SKILL.md](SKILL.md)。

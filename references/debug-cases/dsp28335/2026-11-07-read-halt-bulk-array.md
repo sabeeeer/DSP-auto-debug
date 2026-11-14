@@ -17,9 +17,9 @@
 
 ## 技能修正
 
-1. 2026-11-14 修订：新 RAM 程序用 `ti_c2000_run_read.ps1` 在同一 DSS 会话中构建（按需）、加载、运行、读完计划中的变量；固件已有 ISR 或 DMA 冻结的 RAM 缓冲时用 `ti_c2000_read_dma.ps1 -FrozenBufferReady`。旧 `-Build -Run -ReadVars` 混用仍在碰硬件前拒绝。旧的“先 `-Build -Run`、再另起只读验收”不足以证明正在执行本次 RAM `.out`。
-2. `dss_template.js` 只保留运行态读取：在 `connect()` 前设置非停核实时选项，仅 `symbol.load()`，逐项读取时检查目标仍显示运行；没有主动 `halt`、`runAsynch`、复位或下载路径。已停机则报错，不试图由只读脚本重启。
-3. 身份已核实的**现有固件**，大数组用 `scripts/ti_c2000_read_dma.ps1 -FrozenBufferReady` 在单会话内读取；旧 `ti_c2000_read_array_runtime.ps1` 已禁用（`READONLY_UNRELIABLE`）。验证本次刚加载的 RAM 镜像时，数组必须与加载保留在同一 DSS 会话；缓冲需冻结或带序号，码值与表达式锚点交叉核对。`ti_c2000_read_dma.ps1 -FrozenBufferReady -Variables '...'` 可在一次加载中读 ISR/DMA 冻结的数组和所需标量。
+1. 2026-11-14 修订：新 RAM 程序用 `ti_c2000_run_read.ps1` 在同一 DSS 会话中构建（按需）、加载、运行、读完计划中的变量；固件已有 ISR 或 DMA 冻结的 RAM 缓冲时用 `ti_c2000_read_dma.ps1 -FrozenBufferReady`。`ti_c2000_debug.ps1` 现在只做编译/下载/运行，没有读数参数。旧的“先 `-Build -Run`、再另起只读验收”不足以证明正在执行本次 RAM `.out`。
+2. 当时的 `dss_template.js` 只保留运行态读取：在 `connect()` 前设置非停核实时选项，仅 `symbol.load()`，逐项读取时检查目标仍显示运行；没有主动 `halt`、`runAsynch`、复位或下载路径。**该模板与只读入口已于 2026-11-14 一并删除**，保留此段仅作坑记录。
+3. 大数组用 `scripts/ti_c2000_read_dma.ps1 -FrozenBufferReady` 在单会话内读取；旧 `ti_c2000_read_array_runtime.ps1` 已删除（当时是禁用后改为删除）。验证本次刚加载的 RAM 镜像时，数组必须与加载保留在同一 DSS 会话；缓冲需冻结或带序号，码值与表达式锚点交叉核对。`ti_c2000_read_dma.ps1 -FrozenBufferReady -Variables '...'` 可在一次加载中读 ISR/DMA 冻结的数组和所需标量。
 4. 已将 `%TEMP%/read_16ch.js`、`%TEMP%/test_read.js` 改为连接前关闭自动停核、运行态读数，检查目标状态及 `gRunMs` 是否持续递增。前者试用运行态 `readData`，仅在 12 位范围与表达式锚点一致时采用，失败则在运行态逐点读取；导出前 200 帧作为 10 周期数据。后者只测试字地址/行步长与表达式是否相符。两脚本均不主动停核、复位、重新下载或用 `runAsynch` 恢复；正式长期入口是版本化的分批 PowerShell 脚本，临时脚本不作为移植时的依赖。
 
 ## 原阶段回归边界

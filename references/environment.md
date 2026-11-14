@@ -27,8 +27,8 @@
   - 用 CCS12 的 `ti-cgt-c2000_22.6.1.LTS`：`RESULT: OK`（工程 `.cproject` 是 `OUTPUT_FORMAT=COFF`，22.6.1 仍支持 COFF）
 - **链接**：`28335_RAM_lnk.cmd` + `DSP2833x_Headers_nonBIOS.cmd` + `IQmath.lib` + `rts2800_fpu32.lib` → `.out` 生成成功。
 - **失败可判定**：语法错误 → cl2000 非零退出 + `error #29`；未定义符号 → 链接退出码 1 且不产出 `.out`（实测 `neg.out_exists=False`）。
-- **CCS12 旧版停核读回（历史实测，现已停用）**：
-  旧命令曾把 `-Build -Run` 与 `-ReadVars` 合在一次调用（现在明确拒绝）→
+- **CCS12 旧版停核读回（历史实测，入口已删除）**：
+  旧命令曾把 `-Build -Run` 与 `-ReadVars` 合在一次调用（`-ReadVars` 已不存在，`pwsh -File` 下会得到 `UNKNOWN_ARGUMENT`）→
   自动检测到 CCS12 安装目录、用 22.6.1 构建、DSS 连接 XDS100、加载、`target.restart()`、运行、停机读回：
   `TBPRD=65535`、`CMPA.all=0xCCCC0000`(即 CMPA=0xCCCC=52428=65535×80%)、`TBCTL.CLKDIV=3`、
   `GPADIR.bit.GPIO8=1`(OLED 初始化已执行)、`GPAMUX1.bit.GPIO0=1`(EPWM1A 复用已配置)、`SCILBAUD=39`(115200bps)

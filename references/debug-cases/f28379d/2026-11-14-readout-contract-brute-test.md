@@ -1,5 +1,9 @@
 # 2026-11-14 F28379D 单会话读取：上板暴力测试与输出契约修复
 
+- 状态：**已回归**（上板 20+ 用例；旧只读入口当日删除）
+- 器件/目标核：LAUNCHXL-F28379D，CPU1；XDS110 探针，无功率负载
+- 模块：`ti_c2000_run_read.ps1`、`ti_c2000_read_dma.ps1`、`ti_c2000_debug.ps1`、`check_read.ps1` 的输出契约
+
 板卡：LAUNCHXL-F28379D（XDS110，工程 `F28379D_CPU1_Template`，链接 `2837xD_RAM_lnk_cpu1.cmd`）。
 入口：`scripts/ti_c2000_run_read.ps1`（低速连续读）、`scripts/ti_c2000_read_dma.ps1`（冻结缓冲读）。
 目的：验证"仿真器全程在线、单会话运行态读 RAM"在真实板上不再出现前面的误判，同时把输出契约钉死。
@@ -25,8 +29,8 @@
 | DMA 标志永不满足 | `-FrozenValue 12345 -WaitMs 600` | `BUF_NOT_READY` / 1 | 一致 |
 | DMA 数组不存在 | `-ArrayName gNotExistBuf`，标志已满足 | `NO_ARRAY` / 1 | 一致 |
 | 非法行/列、范围倒置、超大数组 | `-Rows 0`、`-ValueMin 10 -ValueMax 1`、`-Rows 400 -Columns 400` | `BAD_DIMENSIONS` / `INVALID_RANGE` / `ARRAY_TOO_LARGE`，退出码 2 | 一致 |
-| 旧只读入口 | `ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1`（有无参数都试） | `READONLY_UNRELIABLE` / 2 | 修复后一致（原先强制参数在守卫之前绑定失败，退化成 exit 1） |
-| `debug.ps1` 旧参数 | `-ReadVars`、`-ReadOnly`、`-WaitFor` | `READONLY_UNRELIABLE` / `WAIT_REQUIRES_SINGLE_SESSION`，退出码 2 | 一致 |
+| 旧只读入口（测试时仍在，现已删除） | `ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1`（有无参数都试） | `READONLY_UNRELIABLE` / 2 | 修复后一致（原先强制参数在守卫之前绑定失败，退化成 exit 1） |
+| `debug.ps1` 旧参数（现已删除） | `-ReadVars`、`-ReadOnly`、`-WaitFor` | 当时 `READONLY_UNRELIABLE` / `WAIT_REQUIRES_SINGLE_SESSION`（2）；现在 `UNKNOWN_ARGUMENT`（2） | 一致 |
 | `check_read.ps1` 边界 | 正常 CSV、行数不符、范围越界、心跳递减、单行、无心跳列、启动窗口、`0x` 十六进制、文件不存在 | `OK` / `EXPECTED_ROWS_MISMATCH` / `RANGE_VIOLATION` / `HEARTBEAT_NOT_ADVANCING` / `NO_LIVENESS_INTERVAL` / `NO_HEARTBEAT` / `STARTUP_WINDOW_VIOLATION` / 接受十六进制 / `NO_CSV` | 一致 |
 
 ## 二、本轮修掉的四个缺陷（都是"看起来通过、其实结论错"一类）
@@ -36,7 +40,11 @@
 3. **`-Build` 时出现两个 `RESULT`**：构建脚本自己的 `RESULT: OK` 被原样回显。现在：构建输出过滤 `^RESULT:`，改为打印 `BUILD   : OK`。
 4. **心跳失败没有 `REASON`**：只打 `FAILURE: HEARTBEAT_FAIL`。现在：`REASON` 里点名哪几路心跳不递增。
 
-另外两处同类小坑：已禁用脚本的强制参数会在守卫之前绑定失败（改为可选参数，保证任何调用方式都返回 `READONLY_UNRELIABLE` / 2）；`-Variables ''` 同理。
+另外两处同类小坑：旧脚本的强制参数会在守卫之前绑定失败（当时改为可选参数保证返回 `READONLY_UNRELIABLE` / 2；**该脚本随后被删除，不再存在**）；`-Variables ''` 同理。
+
+## 五、后续处理（2026-11-14 当日）
+
+用户要求“旧入口删了，只读、另读删了”，于是不再保留“禁用但还在”的空壳：`ti_c2000_read_runtime.ps1`、`ti_c2000_read_array_runtime.ps1`、`scripts/dss_template.js` 已删除；`ti_c2000_debug.ps1` 只保留 `-Build/-Run/-LoadOnly/-ProbeCheckOnly`，旧参数进了 `$args` 时由 `UNKNOWN_ARGUMENT`（exit 2）明确拒绝，绝不静默忽略。留着禁用入口等于暗示那条路可用，这才是最大的埋雷。
 
 ## 三、回归保护
 

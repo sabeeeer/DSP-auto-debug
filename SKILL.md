@@ -17,11 +17,11 @@ description: 处理 TI C2000/DSP 的 CCS 工程：先选单会话读取或执行
 | **二、高速 DMA 读（需要固件侧 DMA 缓冲）** | µs 级波形、高速采集。 | 单会话 `scripts/ti_c2000_read_dma.ps1 -FrozenBufferReady`：**仿真器全程在线**，等冻结 → 批量 `readData` 搬数组。一次调用读**一个冻结窗口**（单缓冲、ping-pong 双缓冲都可以，只要固件置冻结标志/序号）；时间分辨率由固件采样率决定，不靠调试器轮询。调试器侧不做多轮轮询，是因为轮询周期远大于 µs 级采样间隔。 |
 | **三、执行模式** | 修改工程、构建、下载、运行或上板验证。 | 运行态读基线 → 分析 → 改码/构建/下载 → 同一会话复读；命令见[执行手册](references/field-guide.md)。 |
 
-独立只读会话入口（`ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1`）已禁用：**仿真器断开后再读，一定不是本次 RAM 固件**（F28379D 复位跑 Flash；DSP28335 可能读到 Flash 旧程序）。**仿真器在线 + 单会话**是读取 RAM 运行态数据的前提。低速连续读适用于所有板；高速 DMA 读需要固件配置 ADC+DMA 并冻结缓冲——28335 与 28379D 都有 DMA，按工程配置决定，不是器件差异。CCS GUI 手动实时看仍可行：Realtime Mode + 目标可调试 + 会话保持，Expressions/Watch 开 Continuous Refresh。
+旧的独立只读会话入口（`ti_c2000_read_runtime.ps1` / `ti_c2000_read_array_runtime.ps1`）以及 `ti_c2000_debug.ps1` 里的 `-ReadOnly/-ReadVars/-ReadArray/-WaitFor` **已从 skill 中删除**，不保留“禁用但还在”的空壳：**仿真器断开后再读，一定不是本次 RAM 固件**（F28379D 复位跑 Flash；DSP28335 可能读到 Flash 旧程序）。**仿真器在线 + 单会话**是读取 RAM 运行态数据的前提。低速连续读适用于所有板；高速 DMA 读需要固件配置 ADC+DMA 并冻结缓冲——28335 与 28379D 都有 DMA，按工程配置决定，不是器件差异。CCS GUI 手动实时看仍可行：Realtime Mode + 目标可调试 + 会话保持，Expressions/Watch 开 Continuous Refresh。
 
 **表述纠正**：不能写「CCS 完全不支持边运行边读」。CCS 支持运行态读；限制是「会话断开后另起只读」不可靠，以及 µs 级高速数据必须由固件 DMA + 冻结缓冲提供。慢变量、状态机、计数器走低速连续读即可，不需要 DMA。
 
-旧 `-Build/-Run/-LoadOnly` 与 `-ReadVars`/`-ReadArray` 组合已随独立只读入口一起禁用（`READONLY_UNRELIABLE`）。单会话内读数时目标必须持续运行；已停机就报告失败，不用 `halt → read → runAsynch`，也不借读数之名重复烧录。
+`ti_c2000_debug.ps1` 现在只做编译/下载/运行（`-Build` / `-Run` / `-LoadOnly` / `-ProbeCheckOnly`），不读任何值；传旧参数会被 `UNKNOWN_ARGUMENT` 明确拒绝（exit 2），不会被静默忽略。单会话内读数时目标必须持续运行；已停机就报告失败，不用 `halt → read → runAsynch`，也不借读数之名重复烧录。
 
 冻结 RAM 缓冲仍是数组读取；它可由 ISR 或 DMA 填充，DMA 不是第三种模式。执行模式的单会话数组入口沿用脚本名 `scripts/ti_c2000_read_dma.ps1`，用 `-FrozenBufferReady` 声明已核对固件会冻结缓冲；同次还可用 `-Variables` 读标量，避免第二次加载。
 
@@ -44,7 +44,7 @@ description: 处理 TI C2000/DSP 的 CCS 工程：先选单会话读取或执行
 ## 工作规则
 
 1. `.out` 用于下载到 RAM 并提供符号；读取的是该 `.out` 的 RAM 程序，须与板上运行固件一致。记录原始数值、单位、采样条件和目标核；`isHalted()==false` 不足以证明应用在跑，有心跳变量时检查其前后递增。纯构建不覆盖 `Debug` 下的 `.out`；运行态数组在同一 DSS 会话内分批核对心跳。若试运行态 `readData`，先与表达式锚点和数值范围交叉核对。
-2. 执行模式写外设配置先选**同器件、同核、同 API 风格**的 TI 例程，算法先查现成库。确需修改时做真实编译链接；仅显式执行入口（旧 `-Run` 或单会话 `run_read`/冻结数组脚本）才加载并运行。周期信号先在固件侧录满并冻结窗口：50 Hz、1 kHz 的 10 周期是 200 帧；JTAG 可在更长时间内传出，目标仍须运行。
+2. 执行模式写外设配置先选**同器件、同核、同 API 风格**的 TI 例程，算法先查现成库。确需修改时做真实编译链接；仅显式执行入口（`ti_c2000_debug.ps1 -Run`、`ti_c2000_run_read.ps1`、`ti_c2000_read_dma.ps1`）才加载并运行。周期信号先在固件侧录满并冻结窗口：50 Hz、1 kHz 的 10 周期是 200 帧；JTAG 可在更长时间内传出，目标仍须运行。
 3. 成功同时要求 `RESULT: OK` 与退出码 0；失败记录分类、原因和日志。交付时区分现场实测、源码推断和历史案例，不把某一板的结论推广到其他型号。
 4. µs 级波形由固件采集进 RAM 并冻结，再用 JTAG 传出；不要把逐次读 ADC 寄存器当成连续采样。用[读取判据](references/data-read-verdict.md)分别核对固件身份、运行活性、缓冲冻结状态与数值范围；缺失的证据标为未验证，不把 `RESULT: OK` 理解为算法或硬件功能通过。
 

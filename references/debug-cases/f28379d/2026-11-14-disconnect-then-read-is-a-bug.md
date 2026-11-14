@@ -1,5 +1,9 @@
 # F28379D：断开调试会话后另起只读是错误设计（2026-11-14）
 
+- 状态：**已定位**（旧入口曾改为禁用，2026-11-14 彻底删除）
+- 器件/目标核：LAUNCHXL-F28379D，CPU1；XDS100v2 与 XDS110 均复现
+- 模块：DSS 会话边界、`disconnect()` 语义、单会话读数
+
 ## 结论
 
 **调试器连接断开后不能读数据。** 所谓“断开后另起只读”不是继续观察，而是重新连接一个已经复位、跑 Flash 的目标；读到的不是本次 RAM 固件。已从 skill 中禁用该路径。
@@ -58,7 +62,7 @@ connect → reset/halt（只为下载）→ loadProgram → runAsynch
 - 低速：`ti_c2000_run_read.ps1`（不需要 DMA）
 - 高速：`ti_c2000_read_dma.ps1 -FrozenBufferReady`（DMA + ping-pong）
 
-禁用入口：`ti_c2000_read_runtime.ps1`、`ti_c2000_read_array_runtime.ps1`、`ti_c2000_debug.ps1 -ReadOnly`，均返回 `FAILURE: READONLY_UNRELIABLE`（exit 2）。
+旧入口 `ti_c2000_read_runtime.ps1`、`ti_c2000_read_array_runtime.ps1`、`ti_c2000_debug.ps1 -ReadOnly` **已从 skill 删除**（曾短期改为禁用并返回 `READONLY_UNRELIABLE`，2026-11-14 直接删除，不再保留空壳）。`ti_c2000_debug.ps1` 只做编译/下载/运行。
 
 ## 判定 RAM 的证据
 

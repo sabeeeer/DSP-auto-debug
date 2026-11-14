@@ -4,6 +4,7 @@
 #   1. one fixed <project>\readout\ directory - no timestamp dirs, no mirror
 #   2. exactly one success RESULT line; inner RESULT lines are filtered out
 #   3. a failed read overwrites verdict.txt with result: FAIL and drops stale data
+#   4. the separate read-only entry points stay deleted; debug.ps1 is execution only
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $scriptDir
@@ -61,12 +62,27 @@ if ($failIndex -lt 0 -or $dmaIndex -lt 0 -or $failIndex -gt $dmaIndex) {
     $problems.Add('read_dma: failed-read publisher must be defined before the DSS session starts')
 }
 
+# 4. the separate read-only entry points are deleted, not parked; a dormant
+#    entry point keeps advertising "disconnect, then read", which is the bug.
+foreach ($gone in @('ti_c2000_read_runtime.ps1', 'ti_c2000_read_array_runtime.ps1', 'dss_template.js')) {
+    if (Test-Path -LiteralPath (Join-Path (Join-Path $root 'scripts') $gone)) {
+        $problems.Add("read-only entry must stay deleted: scripts/$gone exists again")
+    }
+}
+$debug = Get-ScriptText 'ti_c2000_debug.ps1'
+foreach ($legacy in @('\[switch\]\$ReadOnly', '\$ReadVars', '\$ReadArray', '\$WaitFor', 'dss\.bat', 'dss_template\.js')) {
+    Test-Absent $debug $legacy "debug.ps1: legacy read plumbing removed"
+}
+Test-Contains $debug '\$args\.Count -gt 0' 'debug.ps1: stale read switches must not be ignored'
+Test-Contains $debug 'UNKNOWN_ARGUMENT' 'debug.ps1: unknown argument reported explicitly'
+Test-Absent $debug 'READONLY_(UNRELIABLE|MODE_CONFLICT)' 'debug.ps1: no read-mode failure codes left'
+
 if ($problems.Count -gt 0) {
     Write-Output 'FAILURE: READOUT_CONTRACT_BROKEN'
     foreach ($p in $problems) { Write-Output ('REASON: ' + $p) }
     Write-Output 'RESULT: FAIL'
     exit 1
 }
-Write-Output 'PASS: single readout dir, one RESULT line, failure overwrites verdict and drops stale data'
+Write-Output 'PASS: single readout dir, one RESULT line, failure overwrites verdict, read-only entries stay deleted'
 Write-Output 'RESULT: OK'
 exit 0
