@@ -267,8 +267,10 @@ function Resolve-RunModeSpec {
     }
     if ($norm -eq 'Iterate') {
         # continuous mode re-downloads on purpose; only a user asking for it may enter.
-        # The iterate loop's own children inherit the flag: the parent already had it.
-        if (-not $UserApproved -and -not (Test-IterateChild)) {
+        # No env-var exemption here on purpose: the iterate loop already passes
+        # -UserApproved explicitly to its children (ti_c2000_iterate.ps1), so honouring
+        # TI_C2000_ITERATE_CHILD would only turn a marker into an approval bypass.
+        if (-not $UserApproved) {
             Write-Output 'FAILURE: ITERATE_NOT_APPROVED'
             Write-Output 'RESULT: FAIL'
             Write-Output 'REASON: continuous mode compiles and downloads again every round - it only runs when the user asked for it'

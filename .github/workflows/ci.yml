@@ -38,9 +38,14 @@ jobs:
       - name: Debug case catalog
         shell: pwsh
         run: pwsh -NoProfile -File scripts/check_debug_catalog.ps1 -SkillRoot .
-      - name: Setup failure semantics
+      # every test here is board-free: fixtures and stub children only
+      - name: Behaviour tests
         shell: pwsh
-        run: pwsh -NoProfile -File tests/test_setup_failure.ps1
-      - name: Debug mode dispatch
-        shell: pwsh
-        run: pwsh -NoProfile -File tests/test_mode_dispatch.ps1
+        run: |
+          $failed = @()
+          Get-ChildItem tests -Filter test_*.ps1 | Sort-Object Name | ForEach-Object {
+            Write-Host "== $($_.Name)"
+            pwsh -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
+          }
+          if ($failed.Count -gt 0) { throw "failed: $($failed -join ', ')" }

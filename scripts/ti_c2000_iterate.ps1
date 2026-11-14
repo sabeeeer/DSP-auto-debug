@@ -30,7 +30,9 @@ INTERLOCKS (see ti_c2000_readmode.ps1):
   while this runs, ReadOnly / LoadRead / Start / Stop from outside
                                        -> READONLY_IN_ITERATE / MUTUALLY_EXCLUSIVE /
                                           ITERATE_IN_PROGRESS
-  the loop's own children carry TI_C2000_ITERATE_CHILD=1, which is the only bypass
+  the loop's own children carry TI_C2000_ITERATE_CHILD=1, which lifts the MARKER
+  check only - it is not an approval bypass (every child still passes -UserApproved
+  explicitly, and Resolve-RunModeSpec never honours the flag)
 
 Evidence: readout\iterate\active.json (marker + owning pid), readout\iterate\round-N\
 (the session log, the CSV and the verdict of each round). A marker left by a dead
